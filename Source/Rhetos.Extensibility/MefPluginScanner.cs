@@ -22,11 +22,13 @@ using Rhetos.Logging;
 using Rhetos.Utilities;
 using System;
 using System.Collections.Generic;
+using System.ComponentModel.Composition;
 using System.ComponentModel.Composition.Hosting;
 using System.ComponentModel.Composition.ReflectionModel;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 
 namespace Rhetos.Extensibility
 {
@@ -38,6 +40,7 @@ namespace Rhetos.Extensibility
         private MultiDictionary<string, PluginInfo> _pluginsByExport = null;
         private object _pluginsLock = new object();
         private readonly ILogger _logger;
+        private readonly ILogger _mefLog;
         private readonly ILogger _performanceLogger;
         private readonly Func<IEnumerable<string>> _findAssemblies;
 
@@ -49,6 +52,7 @@ namespace Rhetos.Extensibility
         {
             _performanceLogger = logProvider.GetLogger("Performance");
             _logger = logProvider.GetLogger("Plugins");
+            _mefLog = logProvider.GetLogger("MefLog");
             _findAssemblies = findAssemblies;
         }
 
@@ -65,7 +69,7 @@ namespace Rhetos.Extensibility
 
                     try
                     {
-                        _pluginsByExport = LoadPlugins(assemblies);
+                        _pluginsByExport = LoadPluginsNew(assemblies);
                     }
                     catch (Exception ex)
                     {
@@ -98,10 +102,22 @@ namespace Rhetos.Extensibility
 
         private MultiDictionary<string, PluginInfo> LoadPlugins(List<string> assemblies)
         {
+            _mefLog.Info("START LoadPlugins OLD");
             var stopwatch = Stopwatch.StartNew();
 
+            var sw = Stopwatch.StartNew();
             var assemblyCatalogs = assemblies.Select(name => new AssemblyCatalog(name));
+            _mefLog.Info($"Assembly catalog: {sw.ElapsedMilliseconds} ms for {assemblies.Count} assemblies.");
+            sw.Restart();
+
             var container = new CompositionContainer(new AggregateCatalog(assemblyCatalogs));
+            _mefLog.Info($"Composition container: {sw.ElapsedMilliseconds} ms.");
+            sw.Restart();
+
+            var allParts = container.Catalog.Parts.ToList();
+            _mefLog.Info($"Enumerate all parts: {sw.ElapsedMilliseconds} ms for {allParts.Count} parts.");
+            sw.Restart();
+
             var mefPlugins = container.Catalog.Parts
                 .Select(part => new
                 {
@@ -114,7 +130,9 @@ namespace Rhetos.Extensibility
                         exportDefinition.ContractName,
                         exportDefinition.Metadata,
                         part.PluginType
-                    }));
+                    })).ToList();
+            _mefLog.Info($"Extract parts: {sw.ElapsedMilliseconds} ms for total {mefPlugins.Count} parts.");
+            sw.Restart();
 
             var pluginsByExport = new MultiDictionary<string, PluginInfo>();
             int pluginsCount = 0;
@@ -130,11 +148,106 @@ namespace Rhetos.Extensibility
                     });
             }
 
+            /*
+            foreach (var pluginsGroup in pluginsByExport)
+            {
+                Console.WriteLine($"[{pluginsGroup.Key}]");
+                foreach (var info in pluginsGroup.Value)
+                {
+                    Console.WriteLine($"\t{PluginInfoToString(info)}");
+                }
+            }
+            */
+
             foreach (var pluginsGroup in pluginsByExport)
                 SortByDependency(pluginsGroup.Value);
 
+            _mefLog.Info($"Wrapping up: {sw.ElapsedMilliseconds} ms.");
+
+            _mefLog.Info($"TOTAL OLD MEF: {stopwatch.ElapsedMilliseconds} ms for {pluginsCount} plugins.");
             _performanceLogger.Write(stopwatch, $"{nameof(MefPluginScanner)}: Loaded plugins ({pluginsCount}).");
             return pluginsByExport;
+        }
+
+        private MultiDictionary<string, PluginInfo> LoadPluginsNew(List<string> assemblies)
+        {
+            _mefLog.Info("START LoadPluginsNew");
+            var stopwatch = Stopwatch.StartNew();
+
+            var sw = Stopwatch.StartNew();
+            var allTypes = assemblies.SelectMany(path => Assembly.LoadFrom(path).GetTypes()).ToArray();
+            _mefLog.Info($"Collect all types: {sw.ElapsedMilliseconds} ms for {allTypes.Length} types.");
+            sw.Restart();
+
+            var mefExports = GetMefExportsForTypes(allTypes);
+            _mefLog.Info($"GetMefExportsForType: {sw.ElapsedMilliseconds} ms for {mefExports.Count} exports.");
+            sw.Restart();
+
+            var pluginsByExport = new MultiDictionary<string, PluginInfo>();
+            int pluginsCount = 0;
+            foreach (var export in mefExports)
+            {
+                foreach (var plugin in export.Value)
+                {
+                    pluginsCount++;
+                    pluginsByExport.Add(
+                        export.Key,
+                        plugin);
+    
+                }
+            }
+            /*
+            foreach (var pluginsGroup in pluginsByExport)
+            {
+                Console.WriteLine($"[{pluginsGroup.Key}]");
+                foreach (var info in pluginsGroup.Value)
+                {
+                    Console.WriteLine($"\t{PluginInfoToString(info)}");
+                }
+            }
+            */
+            foreach (var pluginsGroup in pluginsByExport)
+                SortByDependency(pluginsGroup.Value);
+
+            _mefLog.Info($"Wrapping up: {sw.ElapsedMilliseconds} ms.");
+
+            _mefLog.Info($"TOTAL NEW: {stopwatch.ElapsedMilliseconds} ms for {pluginsCount} plugins.");
+            _performanceLogger.Write(stopwatch, $"{nameof(MefPluginScanner)}: Loaded plugins NEW ({pluginsCount}).");
+            return pluginsByExport;
+        }
+
+
+        private static Dictionary<string, List<PluginInfo>> GetMefExportsForTypes(Type[] types)
+        {
+            var allAttributes = types.Select(a => new
+            {
+                type = a,
+                exports = a.GetCustomAttributesData().Where(b => b.AttributeType == typeof(ExportAttribute)).ToList(),
+                metadata = a.GetCustomAttributesData().Where(b => b.AttributeType == typeof(ExportMetadataAttribute)).ToList()
+            });
+
+            var byExport = allAttributes.SelectMany(a => a.exports.Select(b => new
+            {
+                exportType = b.ConstructorArguments[0].Value.ToString(),
+                pluginInfo = new PluginInfo()
+                {
+                    Type = a.type,
+                    Metadata = a.metadata
+                        .Select(m => new KeyValuePair<string, object>((string)m.ConstructorArguments[0].Value, m.ConstructorArguments[1].Value))
+                        .Concat(new[] { new KeyValuePair<string, object>("ExportTypeIdentity", b.ConstructorArguments[0].Value) })
+                        .ToDictionary(c => c.Key, c => c.Value)
+                }
+            }));
+
+            var groupedInfo = byExport.GroupBy(a => a.exportType).ToDictionary(a => a.Key, a => a.Select(b => b.pluginInfo).ToList());
+            return groupedInfo;
+        }
+
+        private string PluginInfoToString(PluginInfo pluginInfo)
+        {
+            var metadata = pluginInfo.Metadata.Select(a => $"[{a.Key}: {a.Value}]");
+            var metadataInfo = string.Join(", ", metadata);
+            return $"{pluginInfo.Type.Name} => {metadataInfo}";
         }
 
         private void SortByDependency(List<PluginInfo> plugins)
