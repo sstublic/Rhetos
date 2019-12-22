@@ -107,9 +107,8 @@ namespace Rhetos.Extensibility
             var stopwatch = Stopwatch.StartNew();
 
             var cacheFilename = Path.Combine(_options.BinFolder, _options.PluginScannerCacheFilename);
-            var cache = File.Exists(cacheFilename)
-                ? JsonConvert.DeserializeObject<CachedPluginsData>(File.ReadAllText(cacheFilename))
-                : new CachedPluginsData();
+            var cacheContents = File.Exists(cacheFilename) ? File.ReadAllText(cacheFilename) : null;
+            var cache = cacheContents == null ? new CachedPluginsData() : JsonConvert.DeserializeObject<CachedPluginsData>(cacheContents);
 
             var newCache = new CachedPluginsData();
             var cachedAssemblies = 0;
@@ -148,9 +147,13 @@ namespace Rhetos.Extensibility
 
             _logger.Info($"Used cached data for {cachedAssemblies} out of total {assemblyPaths.Count} assemblies.");
 
-            _logger.Info($"Writing new cache data to '{cacheFilename}'.");
-            File.WriteAllText(cacheFilename, JsonConvert.SerializeObject(newCache, Formatting.Indented));
-            
+            var sw = Stopwatch.StartNew();
+            var newCacheContents = JsonConvert.SerializeObject(newCache, Formatting.Indented);
+            var cacheValid = newCacheContents == cacheContents;
+            if (!cacheValid) File.WriteAllText(cacheFilename, newCacheContents);
+
+            _logger.Info($"CacheValid={cacheValid} for '{cacheFilename}' in {sw.ElapsedMilliseconds} ms.{(cacheValid ? "" : " Saving new data.")}");
+
             foreach (var pluginsGroup in pluginsByExport)
                 SortByDependency(pluginsGroup.Value);
 
