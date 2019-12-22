@@ -44,7 +44,8 @@ namespace Rhetos
         {
             this.RegisterInstance(configurationProvider);
 
-            var pluginScanner = new MefPluginScanner(findAssemblies, logProvider);
+            //var pluginScanner = new MefPluginScanner(findAssemblies, logProvider);
+            var pluginScanner = new CachedPluginScanner(findAssemblies, configurationProvider.GetOptions<CachedPluginScannerOptions>(), logProvider);
 
             // make properties accessible to modules which are provided with new/unique instance of ContainerBuilder
             this.Properties.Add(nameof(IPluginScanner), pluginScanner);

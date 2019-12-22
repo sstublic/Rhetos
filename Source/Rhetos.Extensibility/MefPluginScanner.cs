@@ -29,6 +29,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Security.Cryptography;
 
 namespace Rhetos.Extensibility
 {
@@ -171,11 +172,33 @@ namespace Rhetos.Extensibility
 
         private MultiDictionary<string, PluginInfo> LoadPluginsNew(List<string> assemblies)
         {
+            var sw = Stopwatch.StartNew();
+            /*
+            var oldCount = assemblies.Count;
+            assemblies = assemblies.Where(a => !IsSystemAssembly(a)).ToList();
+            Console.WriteLine($"Excluded {oldCount - assemblies.Count} out of {oldCount} assemblies due to the being considered a 3rd party.");
+            */
+
+            
+            sw.Restart();
+            var hashes = assemblies.ToDictionary(a => a, a => ComputeFileHash(a));
+            /*
+            foreach (var assembly in assemblies)
+            {
+                var hash = ComputeFileHash(assembly);
+                Console.WriteLine($"{assembly} ==> {hash}");
+            }*/
+            Console.WriteLine($"Computed hashes for {hashes.Count} files in {sw.ElapsedMilliseconds} ms.");
+            sw.Restart();
+
             _mefLog.Info("START LoadPluginsNew");
             var stopwatch = Stopwatch.StartNew();
 
-            var sw = Stopwatch.StartNew();
-            var allTypes = assemblies.SelectMany(path => Assembly.LoadFrom(path).GetTypes()).ToArray();
+            var allAssemblies = assemblies.Select(path => Assembly.LoadFrom(path)).ToArray();
+            _mefLog.Info($"Load assemblies: {sw.ElapsedMilliseconds} ms for {allAssemblies.Length} assemblies.");
+            sw.Restart();
+
+            var allTypes = allAssemblies.SelectMany(a => a.GetTypes()).ToArray();
             _mefLog.Info($"Collect all types: {sw.ElapsedMilliseconds} ms for {allTypes.Length} types.");
             sw.Restart();
 
@@ -184,14 +207,14 @@ namespace Rhetos.Extensibility
             sw.Restart();
 
             var pluginsByExport = new MultiDictionary<string, PluginInfo>();
-            int pluginsCount = 0;
+            var pluginsCount = 0;
             foreach (var export in mefExports)
             {
                 foreach (var plugin in export.Value)
                 {
                     pluginsCount++;
                     pluginsByExport.Add(
-                        export.Key,
+                        export.Key.ToString(),
                         plugin);
     
                 }
@@ -209,6 +232,42 @@ namespace Rhetos.Extensibility
             foreach (var pluginsGroup in pluginsByExport)
                 SortByDependency(pluginsGroup.Value);
 
+            var exportTypes = mefExports.Select(a => a.Key).Distinct().ToList();
+            var exportTypeAssemblies = exportTypes.Select(a => a.Assembly.CodeBase).Distinct().ToList();
+            Console.WriteLine($"Total {exportTypes.Count} exported types in {exportTypeAssemblies.Count} assemblies.");
+            /*
+            foreach (var exportType in exportTypes)
+            {
+                Console.WriteLine($"{exportType} ==> {exportType.Assembly.CodeBase}");
+            }
+            */
+            var implementations = mefExports.SelectMany(a => a.Value.Select(plugin => plugin.Type)).ToList();
+            var implementationAssemblies = implementations.Select(a => a.Assembly.CodeBase).Distinct().ToList();
+            Console.WriteLine($"Total {implementations.Count} implementation types in {implementationAssemblies.Count} assemblies.");
+            /*
+            foreach (var path in exportTypeAssemblies)
+            {
+                Console.WriteLine(path);
+            }*/
+
+            var info = allAssemblies
+                .Select(a => new
+                {
+                    File = a.Location,
+                    Company = FileVersionInfo.GetVersionInfo(a.Location).CompanyName ?? "N/A"
+                })
+                .GroupBy(a => a.Company)
+                .ToDictionary(a => a.Key, a => a.ToList());
+            /*
+            foreach (var i in info)
+            {
+                Console.WriteLine($"{i.Key} ==> {i.Value.Count} assemblies.");
+                foreach (var file in i.Value)
+                {
+                    Console.WriteLine($"\t{file.File}");
+                }
+            }
+            */
             _mefLog.Info($"Wrapping up: {sw.ElapsedMilliseconds} ms.");
 
             _mefLog.Info($"TOTAL NEW: {stopwatch.ElapsedMilliseconds} ms for {pluginsCount} plugins.");
@@ -216,8 +275,28 @@ namespace Rhetos.Extensibility
             return pluginsByExport;
         }
 
+        private static string[] _excludeCompanies = {"Microsoft", "Newtonsoft", "NLog", "Microsoft Corporation"};
+        private static bool IsSystemAssembly(string filename)
+        {
+            var company = FileVersionInfo.GetVersionInfo(filename)?.CompanyName;
+            if (string.IsNullOrEmpty(company)) return false;
+            if (_excludeCompanies.Contains(company) || company.Contains("(Microsoft Corporation")) return true;
+            return false;
+        }
 
-        private static Dictionary<string, List<PluginInfo>> GetMefExportsForTypes(Type[] types)
+        private static string ComputeFileHash(string filename)
+        {
+            using (var md5 = MD5.Create())
+            {
+                using (var stream = File.OpenRead(filename))
+                {
+                    var hash = md5.ComputeHash(stream);
+                    return BitConverter.ToString(hash).ToLowerInvariant();
+                }
+            }
+        }
+
+        private static Dictionary<Type, List<PluginInfo>> GetMefExportsForTypes(Type[] types)
         {
             var allAttributes = types.Select(a => new
             {
@@ -228,7 +307,7 @@ namespace Rhetos.Extensibility
 
             var byExport = allAttributes.SelectMany(a => a.exports.Select(b => new
             {
-                exportType = b.ConstructorArguments[0].Value.ToString(),
+                exportType = (Type)b.ConstructorArguments[0].Value,
                 pluginInfo = new PluginInfo()
                 {
                     Type = a.type,
