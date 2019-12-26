@@ -125,12 +125,11 @@
     <Reference Include="System.Xml" />
   </ItemGroup>
   <ItemGroup>
-    <Compile Include="CachedPluginScanner.cs" />
-    <Compile Include="CachedPluginScannerOptions.cs" />
-    <Compile Include="CachedPluginsData.cs" />
+    <Compile Include="PluginScanner.cs" />
+    <Compile Include="PluginScannerOptions.cs" />
+    <Compile Include="PluginsCacheData.cs" />
     <Compile Include="IPluginScanner.cs" />
     <Compile Include="PluginInfo.cs" />
-    <Compile Include="MefPluginScanner.cs" />
     <Compile Include="NamedPlugins.cs" />
     <Compile Include="PluginsContainer.cs" />
     <Compile Include="PluginsMetadataCache.cs" />
