@@ -1,0 +1,18 @@
+{
+  "Rhetos": {
+    "LegacyPaths": {
+      "ResourcesFolder": "Resources"
+    },
+    "AppSecurity": {
+      "AllClaimsForUsers": ""
+    },
+    "App": {
+      "RhetosRuntimePath": "RhetosApp.dll",
+      "AssetsFolder": "RhetosAssets",
+      "DatabaseLanguage": "MsSql"
+    },
+    "PluginScanner": {
+      "IgnoreAssemblyFiles": ["rhetos.exe", "rhetos.dll"]
+    }
+  }
+}

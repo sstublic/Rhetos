@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net5.0</TargetFramework>
+    <RestoreAdditionalProjectSources>$(RestoreAdditionalProjectSources);..\..\Install</RestoreAdditionalProjectSources>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Rhetos">
+      <Version>5.0.0-dev*</Version>
+    </PackageReference>
+    <PackageReference Include="Rhetos.MSBuild">
+      <Version>5.0.0-dev*</Version>
+    </PackageReference>
+    <PackageReference Include="Rhetos.CommonConcepts">
+      <Version>5.0.0-dev*</Version>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="rhetos-app.local.settings.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Update="rhetos-app.settings.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+</Project>
