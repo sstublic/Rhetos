@@ -28,6 +28,18 @@
   `ToSimple` method (see the new `ToSimpleMethodCache` class), instead of scanning all generated overloads
   with reflection on each call. This reduces CPU usage of the repository `Load()` and `Load(ids)` methods
   and other generic reading features, most noticeably on applications with a large number of entities.
+* New opt-in optimization for LINQ queries over in-memory data, typically created by filter implementations
+  that return a materialized list with `.AsQueryable()`: set the `CommonConcepts:OptimizeInMemoryQueryable`
+  configuration option to `true` to execute such queries with the .NET expression interpreter, instead of
+  the standard .NET behavior that compiles each query's expression tree to IL (a temporary `DynamicMethod`)
+  on each query execution. This reduces CPU usage, GC and finalizer-thread pressure on applications
+  that often read small data sets through such filters.
+  * The optimization is applied only to data sets smaller than `CommonConcepts:OptimizeInMemoryQueryableThreshold`
+    (default 1000). Larger data sets, and any query expression that cannot be interpreted, use the standard
+    .NET behavior. The threshold default is derived from a measured compiled-vs-interpreted break-even point
+    (6000-9500 records, documented in the `OptimizeInMemoryQueryableThreshold` option remarks).
+  * Optional diagnostics: assign the `QueryableHelper.Telemetry` callback to record row count, expression shape
+    and execution time for each optimized query execution.
 
 ### Internal improvements
 

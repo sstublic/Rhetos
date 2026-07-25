@@ -51,5 +51,36 @@ namespace Rhetos.Dom.DefaultConcepts
         /// If true, read command checks that valid property filter should contain a simple property correctly formated.
         /// </summary>
         public bool ReadCommandSimpleProperty { get; set; } = true;
+
+        /// <summary>
+        /// Optimizes in-memory queries (LINQ queries over a materialized list, usually created by a filter
+        /// implementation that returns <c>items.AsQueryable()</c>), by executing them with the expression
+        /// interpreter instead of compiling the expression tree to IL code on each query execution.
+        /// <para>
+        /// The optimization is applied only on small data sets (see <see cref="OptimizeInMemoryQueryableThreshold"/>),
+        /// where the query compilation takes more time than the query execution.
+        /// On larger data sets, and on any query expression that cannot be interpreted,
+        /// the standard .NET behavior is used.
+        /// </para>
+        /// <para>
+        /// This option is disabled by default. Enable it if the application often reads small data sets
+        /// with filters that are implemented on an in-memory list.
+        /// </para>
+        /// </summary>
+        public bool OptimizeInMemoryQueryable { get; set; } = false;
+
+        /// <summary>
+        /// Maximum number of records in the source collection for the <see cref="OptimizeInMemoryQueryable"/>
+        /// optimization to be applied. If the source has this many records or more, the standard .NET behavior is used.
+        /// </summary>
+        /// <remarks>
+        /// The default value is derived from a micro-benchmark (BenchmarkDotNet, .NET 10) comparing the interpreted
+        /// and the compiled execution of representative composed queries (stacked Where, OrderBy/ThenBy, Skip/Take,
+        /// Select projection) over an in-memory list: the measured break-even is between 6000 records (scalar Count
+        /// queries) and 9500 records (materializing queries). The default value leaves a safety margin below the
+        /// break-even, and it also limits the additional memory allocations of the expression interpreter
+        /// (about 0.7 kB per interpreted record).
+        /// </remarks>
+        public int OptimizeInMemoryQueryableThreshold { get; set; } = 1000;
     }
 }

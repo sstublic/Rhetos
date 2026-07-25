@@ -39,6 +39,14 @@ namespace Rhetos.Dom.DefaultConcepts
         public GenericFilterHelper GenericFilterHelper { get; set; }
         public IDelayedLogProvider DelayedLogProvider { get; set; }
         public IOrmUtility OrmUtility { get; set; }
+
+        /// <summary>
+        /// Run-time options. May be null: <see cref="CommonConceptsRuntimeOptions"/> is registered to the dependency
+        /// injection container by the generated application, and this class is resolved with PropertiesAutowired
+        /// (unresolvable properties are silently skipped), so the property remains null in containers without
+        /// the generated application, such as the Rhetos build process or unit tests.
+        /// </summary>
+        public CommonConceptsRuntimeOptions CommonConceptsRuntimeOptions { get; set; }
     }
 
     /// <summary>
@@ -64,6 +72,8 @@ namespace Rhetos.Dom.DefaultConcepts
         private readonly IDelayedLogger _delayedLogger;
         private readonly GenericFilterHelper _genericFilterHelper;
         private readonly IOrmUtility _ormUtility;
+        private readonly bool _optimizeInMemoryQueryable;
+        private readonly int _optimizeInMemoryQueryableThreshold;
 
         private readonly string _genericRepositoryName;
         private readonly Lazy<IRepository> _repository;
@@ -87,6 +97,12 @@ namespace Rhetos.Dom.DefaultConcepts
             _delayedLogger = parameters.DelayedLogProvider.GetLogger(_genericRepositoryName);
             _genericFilterHelper = parameters.GenericFilterHelper;
             _ormUtility = parameters.OrmUtility;
+
+            // CommonConceptsRuntimeOptions may be null in containers without the generated application
+            // (see the property documentation). The optimization is disabled in that case.
+            var runtimeOptions = parameters.CommonConceptsRuntimeOptions;
+            _optimizeInMemoryQueryable = runtimeOptions != null && runtimeOptions.OptimizeInMemoryQueryable;
+            _optimizeInMemoryQueryableThreshold = runtimeOptions?.OptimizeInMemoryQueryableThreshold ?? 0;
 
             _repository = new Lazy<IRepository>(() => InitializeRepository(parameters.Repositories));
             Reflection = new ReflectionHelper<TEntityInterface>(EntityName, parameters.DomainObjectModel, _repository);
@@ -205,6 +221,20 @@ namespace Rhetos.Dom.DefaultConcepts
             }
         }
 
+        /// <summary>
+        /// If enabled by <see cref="CommonConceptsRuntimeOptions.OptimizeInMemoryQueryable"/>, a query over a small
+        /// materialized list is replaced by an equivalent query that is executed with the expression interpreter,
+        /// instead of compiling the expression tree to IL code on each query execution.
+        /// In any other case the given items are returned unchanged.
+        /// </summary>
+        private IEnumerable<TEntityInterface> OptimizeInMemoryQueryable(IEnumerable<TEntityInterface> items)
+        {
+            if (!_optimizeInMemoryQueryable || items == null)
+                return items;
+
+            return (IEnumerable<TEntityInterface>)QueryableHelper.OptimizeInMemoryQueryable(items, _optimizeInMemoryQueryableThreshold);
+        }
+
         public IEnumerable<TEntityInterface> Read(object parameter, Type parameterType, bool preferQuery)
         {
             // Use Load(parameter), Query(parameter) or Filter(Query(), parameter), if any of the options exist.
@@ -226,7 +256,7 @@ namespace Rhetos.Dom.DefaultConcepts
                     return () =>
                     {
                         _logger.Trace(() => $"Reading using Query({reader.GetParameters()[0].ParameterType})");
-                        return (IEnumerable<TEntityInterface>)reader.InvokeEx(_repository.Value, parameter);
+                        return OptimizeInMemoryQueryable((IEnumerable<TEntityInterface>)reader.InvokeEx(_repository.Value, parameter));
                     };
                 };
 
@@ -239,7 +269,7 @@ namespace Rhetos.Dom.DefaultConcepts
                     {
                         _logger.Trace(() => $"Reading using queryable Filter(Query(), {reader.GetParameters()[1].ParameterType})");
                         var query = Reflection.RepositoryQueryMethod.InvokeEx(_repository.Value);
-                        return (IEnumerable<TEntityInterface>)reader.InvokeEx(_repository.Value, query, parameter);
+                        return OptimizeInMemoryQueryable((IEnumerable<TEntityInterface>)reader.InvokeEx(_repository.Value, query, parameter));
                     };
                 };
 
@@ -447,7 +477,7 @@ namespace Rhetos.Dom.DefaultConcepts
                         {
                             _logger.Trace(() => $"Filtering using queryable Filter(items, {reader.GetParameters()[1].ParameterType})");
                             var query = Reflection.AsQueryable(items);
-                            return (IEnumerable<TEntityInterface>)reader.InvokeEx(_repository.Value, query, parameter);
+                            return OptimizeInMemoryQueryable((IEnumerable<TEntityInterface>)reader.InvokeEx(_repository.Value, query, parameter));
                         };
                     };
 
