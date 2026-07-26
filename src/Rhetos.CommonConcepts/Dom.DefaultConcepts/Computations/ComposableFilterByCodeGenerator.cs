@@ -21,6 +21,7 @@ using Rhetos.Compiler;
 using Rhetos.Dsl;
 using Rhetos.Dsl.DefaultConcepts;
 using Rhetos.Extensibility;
+using System.Collections.Generic;
 using System.ComponentModel.Composition;
 using System.Linq;
 using System.Text.RegularExpressions;
@@ -49,16 +50,17 @@ namespace Rhetos.Dom.DefaultConcepts
             string queryableType = $"IQueryable<Common.Queryable.{info.Source.Module.Name}_{info.Source.Name}>";
 
             string filterMethod = GetOptimizedFilterMethod(info, queryableType) ??
-            $@"public {queryableType} Filter({queryableType} localSource, {info.Parameter} localParameter)
+                RepositoryHelper.GenerateFilterMethod(queryableType,
+                    $"({queryableType} localSource, {info.Parameter} localParameter)",
+        $@"
         {{
             Func<{queryableType}, Common.DomRepository, {info.Parameter}{AdditionalParametersTypeTag.Evaluate(info)}, {queryableType}> filterFunction =
             {info.Expression};
 
             {BeforeFilterTag.Evaluate(info)}
             return filterFunction(localSource, _domRepository, localParameter{AdditionalParametersArgumentTag.Evaluate(info)});
-        }}
-
-        ";
+        }}",
+                    "localSource, localParameter");
 
             codeBuilder.InsertCode(filterMethod, RepositoryHelper.RepositoryMembers, info.Source);
         }
@@ -101,9 +103,21 @@ namespace Rhetos.Dom.DefaultConcepts
             if (nonStandardParameters.Any(parameter => new Regex($@"\b{parameter}\b").IsMatch(simplifiedMethodBody)))
                 return null;
             else
-                return $@"public {queryableType} Filter({queryableType} {parameterSource}, {info.Parameter} {parameterFilter}){simplifiedMethodBody}
-
-        ";
+                return RepositoryHelper.GenerateFilterMethod(queryableType,
+                    $"({queryableType} {parameterSource}, {info.Parameter} {parameterFilter})",
+                    simplifiedMethodBody,
+                    $"{parameterSource}, {parameterFilter}");
         }
+    }
+
+    /// <summary>
+    /// Injects the <see cref="CommonConceptsRuntimeOptions"/> into the repository class,
+    /// needed by the generated filter method, see <see cref="RepositoryHelper.GenerateFilterMethod"/>.
+    /// </summary>
+    [Export(typeof(IConceptMacro))]
+    public class ComposableFilterByRuntimeOptionsMacro : IConceptMacro<ComposableFilterByInfo>
+    {
+        public IEnumerable<IConceptInfo> CreateNewConcepts(ComposableFilterByInfo conceptInfo, IDslModel existingConcepts)
+            => new[] { RepositoryHelper.CreateRuntimeOptionsUses(conceptInfo.Source) };
     }
 }

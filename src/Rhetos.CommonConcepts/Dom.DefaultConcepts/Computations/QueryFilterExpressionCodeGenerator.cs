@@ -22,7 +22,9 @@ using Rhetos.Dsl;
 using Rhetos.Dsl.DefaultConcepts;
 using Rhetos.Extensibility;
 using System;
+using System.Collections.Generic;
 using System.ComponentModel.Composition;
+using System.Linq;
 
 namespace Rhetos.Dom.DefaultConcepts
 {
@@ -40,12 +42,23 @@ namespace Rhetos.Dom.DefaultConcepts
             var parsedExpression = new ParsedExpression(info.Expression, new[] { queryableType, info.Parameter }, info,
                 $"{Environment.NewLine}            {BeforeFilterTag.Evaluate(info)}");
 
-            string filterMethod =
-        $@"public {queryableType} Filter{parsedExpression.MethodParametersAndBody}
-
-        ";
+            string filterMethod = RepositoryHelper.GenerateFilterMethod(queryableType,
+                parsedExpression.MethodParameters,
+                parsedExpression.MethodBody,
+                string.Join(", ", parsedExpression.ExpressionParameters.Select(parameter => parameter.Name)));
 
             codeBuilder.InsertCode(filterMethod, RepositoryHelper.RepositoryMembers, info.Source);
         }
+    }
+
+    /// <summary>
+    /// Injects the <see cref="CommonConceptsRuntimeOptions"/> into the repository class,
+    /// needed by the generated filter method, see <see cref="RepositoryHelper.GenerateFilterMethod"/>.
+    /// </summary>
+    [Export(typeof(IConceptMacro))]
+    public class QueryFilterExpressionRuntimeOptionsMacro : IConceptMacro<QueryFilterExpressionInfo>
+    {
+        public IEnumerable<IConceptInfo> CreateNewConcepts(QueryFilterExpressionInfo conceptInfo, IDslModel existingConcepts)
+            => new[] { RepositoryHelper.CreateRuntimeOptionsUses(conceptInfo.Source) };
     }
 }

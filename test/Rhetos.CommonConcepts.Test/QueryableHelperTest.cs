@@ -300,6 +300,88 @@ namespace Rhetos.CommonConcepts.Test
 
         #endregion
         //=========================================================================
+        #region Optimizing the filter result
+
+        private static CommonConceptsRuntimeOptions Options(bool optimize, int threshold = 1000) =>
+            new CommonConceptsRuntimeOptions { OptimizeInMemoryQueryable = optimize, OptimizeInMemoryQueryableThreshold = threshold };
+
+        [TestMethod]
+        public void OptimizeFilterResultWithoutOptions()
+        {
+            var query = TestItems().AsQueryable();
+
+            Assert.AreSame(query, QueryableHelper.OptimizeFilterResult(query, null));
+        }
+
+        [TestMethod]
+        public void OptimizeFilterResultDisabled()
+        {
+            var query = TestItems().AsQueryable();
+
+            Assert.AreSame(query, QueryableHelper.OptimizeFilterResult(query, Options(optimize: false)));
+        }
+
+        [TestMethod]
+        public void OptimizeFilterResultEnabled()
+        {
+            var query = TestItems().AsQueryable();
+
+            var optimized = QueryableHelper.OptimizeFilterResult(query, Options(optimize: true));
+
+            Assert.IsTrue(optimized is InterpretedQueryable<SimpleEntity>, $"Unexpected result type {optimized.GetType()}.");
+            Assert.AreEqual("a1, b1, a2", TestUtility.Dump(optimized.ToList()));
+        }
+
+        [TestMethod]
+        public void OptimizeFilterResultOnOrmQuery()
+        {
+            var ormQuery = new FakeOrmQueryable<SimpleEntity>();
+
+            Assert.AreSame(ormQuery, QueryableHelper.OptimizeFilterResult(ormQuery, Options(optimize: true)));
+        }
+
+        [TestMethod]
+        public void OptimizeFilterResultUsesThresholdFromOptions()
+        {
+            var records = new List<InterpretedQueryTelemetry>();
+
+            // The test data has 3 records, the threshold is 3: the standard queryable behavior is expected.
+            var optimized = QueryableHelper.OptimizeFilterResult(TestItems().AsQueryable(), Options(optimize: true, threshold: 3));
+            Assert.IsTrue(optimized is InterpretedQueryable<SimpleEntity>, $"Unexpected result type {optimized.GetType()}.");
+
+            QueryableHelper.Telemetry = records.Add;
+            try
+            {
+                Assert.AreEqual("a1, a2", TestUtility.Dump(optimized.Where(item => item.Name.StartsWith("a", StringComparison.Ordinal)).ToList()));
+            }
+            finally
+            {
+                QueryableHelper.Telemetry = null;
+            }
+
+            Assert.AreEqual(1, records.Count);
+            Assert.AreEqual(3, records[0].SourceCount);
+            Assert.IsFalse(records[0].Interpreted, "The query should not be interpreted at the threshold.");
+
+            // The same query below the threshold is interpreted.
+            records.Clear();
+            var optimizedSmall = QueryableHelper.OptimizeFilterResult(TestItems().AsQueryable(), Options(optimize: true, threshold: 4));
+            QueryableHelper.Telemetry = records.Add;
+            try
+            {
+                Assert.AreEqual("a1, a2", TestUtility.Dump(optimizedSmall.Where(item => item.Name.StartsWith("a", StringComparison.Ordinal)).ToList()));
+            }
+            finally
+            {
+                QueryableHelper.Telemetry = null;
+            }
+
+            Assert.AreEqual(1, records.Count);
+            Assert.IsTrue(records[0].Interpreted, "The query should be interpreted below the threshold.");
+        }
+
+        #endregion
+        //=========================================================================
         #region GenericRepository integration
 
         public class SimpleFilter { }

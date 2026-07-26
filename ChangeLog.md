@@ -38,6 +38,10 @@
     (default 1000). Larger data sets, and any query expression that cannot be interpreted, use the standard
     .NET behavior. The threshold default is derived from a measured compiled-vs-interpreted break-even point
     (6000-9500 records, documented in the `OptimizeInMemoryQueryableThreshold` option remarks).
+  * The option is applied on the filters that are implemented in DSL scripts (`ItemFilter`, `ComposableFilterBy`,
+    `QueryFilter` and similar concepts): the generated repository's `Filter(IQueryable, parameter)` method now
+    wraps the result of the filter implementation. It is also applied on the generic reading and filtering
+    features that resolve those methods with reflection (see `GenericRepository`).
   * Independently of the option, the *empty* queries that are created by the framework are always executed with
     the expression interpreter: the generated `Filter(query, ids)` method for an empty list of IDs (used by the
     generated `Save` method when loading the old values, and by the `Lock*` concepts), and the deny-all row

@@ -144,5 +144,63 @@ namespace Rhetos.Dom.DefaultConcepts
 
             codeBuilder.InsertCode($"Common.QueryableRepositoryBase<Common.Queryable.{module}_{entity}, {module}.{entity}>", OverrideBaseTypeTag, info);
         }
+
+        /// <summary>
+        /// Member name of the run-time options in the generated repository class, see <see cref="CreateRuntimeOptionsUses"/>.
+        /// </summary>
+        public const string RuntimeOptionsMember = "_commonConceptsRuntimeOptions";
+
+        /// <summary>
+        /// Generates the source code of a repository's queryable <c>Filter</c> method, from a filter implementation
+        /// that is provided in a DSL script snippet.
+        /// The snippet is placed in a private <c>Filter_Impl</c> method, and the public <c>Filter</c> method is a thin
+        /// wrapper that optimizes the returned in-memory query, see <see cref="QueryableHelper"/>.
+        /// </summary>
+        /// <param name="queryableType">
+        /// The method's return type and the type of its first parameter, for example <c>IQueryable&lt;Common.Queryable.Module_Entity&gt;</c>.
+        /// </param>
+        /// <param name="parameters">
+        /// The method's parameters including the surrounding parentheses,
+        /// for example <c>(IQueryable&lt;Common.Queryable.Module_Entity&gt; source, Module.Parameter parameter)</c>.
+        /// </param>
+        /// <param name="implementationBody">
+        /// The filter implementation, formatted as a C# method body including the surrounding braces.
+        /// It is inserted without any modification, since it may contain multiple <c>return</c> statements.
+        /// </param>
+        /// <param name="arguments">
+        /// The parameter names, separated by a comma, forwarded from the public method to the implementation method.
+        /// </param>
+        /// <remarks>
+        /// The name and the signature of the public method must not be changed, because the framework resolves it
+        /// by reflection: see ReflectionHelper.RepositoryQueryableFilterMethod.
+        /// The generated method requires the <see cref="RuntimeOptionsMember"/> member in the repository class,
+        /// see <see cref="CreateRuntimeOptionsUses"/>.
+        /// </remarks>
+        public static string GenerateFilterMethod(string queryableType, string parameters, string implementationBody, string arguments) =>
+$@"public {queryableType} Filter{parameters}
+        {{
+            return Rhetos.Dom.DefaultConcepts.QueryableHelper.OptimizeFilterResult(Filter_Impl({arguments}), {RuntimeOptionsMember});
+        }}
+
+        private {queryableType} Filter_Impl{parameters}{implementationBody}
+
+        ";
+
+        /// <summary>
+        /// Returns the concept that adds the run-time options member to the given data structure's repository class,
+        /// needed by the code generated with <see cref="GenerateFilterMethod"/>.
+        /// </summary>
+        /// <remarks>
+        /// <see cref="RepositoryUsesInfo"/> is deduplicated by its concept key (data structure and property name),
+        /// so multiple filters on the same data structure, and other features that use the same member
+        /// (see MoneyRoundingMacro), result with a single member in the generated repository class.
+        /// </remarks>
+        public static RepositoryUsesInfo CreateRuntimeOptionsUses(DataStructureInfo dataStructure) =>
+            new RepositoryUsesInfo
+            {
+                DataStructure = dataStructure,
+                PropertyName = RuntimeOptionsMember,
+                PropertyType = "Rhetos.Dom.DefaultConcepts.CommonConceptsRuntimeOptions"
+            };
     }
 }

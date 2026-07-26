@@ -76,6 +76,11 @@ namespace Rhetos.Dom.DefaultConcepts
     /// and the deny-all row permissions filter in <see cref="FilterExpression{T}.OptimizedWhere"/>.
     /// </description></item>
     /// <item><description>
+    /// <b>Filter methods generated from a DSL script snippet</b> (enabled by
+    /// <see cref="CommonConceptsRuntimeOptions.OptimizeInMemoryQueryable"/>, see <see cref="OptimizeFilterResult"/>):
+    /// the generated repository's <c>Filter(IQueryable, parameter)</c> methods wrap the snippet's result.
+    /// </description></item>
+    /// <item><description>
     /// <b>Dynamic reading and filtering</b> (enabled by <see cref="CommonConceptsRuntimeOptions.OptimizeInMemoryQueryable"/>):
     /// <see cref="GenericRepository{TEntityInterface}"/> applies <see cref="OptimizeInMemoryQueryable{T}(IQueryable{T}, int)"/>
     /// on the results of the repository's <c>Query(parameter)</c> and <c>Filter</c> methods that it resolves by reflection.
@@ -164,6 +169,24 @@ namespace Rhetos.Dom.DefaultConcepts
         /// </para>
         /// </remarks>
         public static IQueryable<T> EmptyInterpreted<T>() => EmptyInterpretedQuery<T>.Instance;
+
+        /// <summary>
+        /// Applies <see cref="OptimizeInMemoryQueryable{T}(IQueryable{T}, int)"/> on the result of a repository's
+        /// <c>Filter</c> method, if enabled by <see cref="CommonConceptsRuntimeOptions.OptimizeInMemoryQueryable"/>.
+        /// It is called from the generated code, see RepositoryHelper.GenerateFilterMethod.
+        /// </summary>
+        /// <param name="result">Result of the filter implementation. ORM queries are returned unchanged.</param>
+        /// <param name="options">
+        /// Run-time options. If null (the options are not available in the build-time dependency injection container),
+        /// the given query is returned unchanged.
+        /// </param>
+        public static IQueryable<T> OptimizeFilterResult<T>(IQueryable<T> result, CommonConceptsRuntimeOptions options)
+        {
+            if (options == null || !options.OptimizeInMemoryQueryable)
+                return result;
+
+            return OptimizeInMemoryQueryable(result, options.OptimizeInMemoryQueryableThreshold);
+        }
 
         #region Implementation
 
