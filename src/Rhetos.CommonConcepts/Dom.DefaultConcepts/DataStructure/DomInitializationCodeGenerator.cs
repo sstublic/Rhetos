@@ -420,7 +420,12 @@ namespace Common
             }}
             else if (!ids.Any())
             {{
-                return Array.Empty<TQueryableEntity>().AsQueryable();
+                // An interpreted empty query is returned instead of Array.Empty<TQueryableEntity>().AsQueryable(),
+                // because the standard EnumerableQuery would compile the composed query expression to IL code
+                // on each execution, even though there are no records to read.
+                // For example, the generated Save method reads the old values with 'Filter(Query(), ids).Select(...).ToList()',
+                // and the ids list is empty on each save that only inserts or only updates the records.
+                return Rhetos.Dom.DefaultConcepts.QueryableHelper.EmptyInterpreted<TQueryableEntity>();
             }}
             else
             {{

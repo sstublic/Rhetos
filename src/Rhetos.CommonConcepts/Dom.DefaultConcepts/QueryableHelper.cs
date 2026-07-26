@@ -66,6 +66,22 @@ namespace Rhetos.Dom.DefaultConcepts
     /// <summary>
     /// Helper methods for optimizing in-memory queries.
     /// </summary>
+    /// <remarks>
+    /// Coverage map of the in-memory query optimization (see <see cref="InterpretedQueryable{T}"/>),
+    /// applied at the places where an in-memory queryable is <b>created</b>:
+    /// <list type="bullet">
+    /// <item><description>
+    /// <b>Empty queries created by the framework</b> (unconditional, see <see cref="EmptyInterpreted{T}"/>):
+    /// the generated <c>Common.OrmRepositoryBase.Filter(query, ids)</c> method for an empty list of IDs,
+    /// and the deny-all row permissions filter in <see cref="FilterExpression{T}.OptimizedWhere"/>.
+    /// </description></item>
+    /// <item><description>
+    /// <b>Dynamic reading and filtering</b> (enabled by <see cref="CommonConceptsRuntimeOptions.OptimizeInMemoryQueryable"/>):
+    /// <see cref="GenericRepository{TEntityInterface}"/> applies <see cref="OptimizeInMemoryQueryable{T}(IQueryable{T}, int)"/>
+    /// on the results of the repository's <c>Query(parameter)</c> and <c>Filter</c> methods that it resolves by reflection.
+    /// </description></item>
+    /// </list>
+    /// </remarks>
     public static class QueryableHelper
     {
         /// <summary>
@@ -128,7 +144,37 @@ namespace Rhetos.Dom.DefaultConcepts
             return optimize(items, threshold);
         }
 
+        /// <summary>
+        /// Returns an empty query that is executed by the expression interpreter, instead of compiling the query's
+        /// expression tree to IL code on each execution. It is intended to be used by the framework and the generated
+        /// code, instead of <c>Array.Empty&lt;T&gt;().AsQueryable()</c>.
+        /// </summary>
+        /// <remarks>
+        /// In contrast to <see cref="OptimizeInMemoryQueryable{T}(IQueryable{T}, int)"/>, this optimization is
+        /// unconditional (it is not controlled by <see cref="CommonConceptsRuntimeOptions.OptimizeInMemoryQueryable"/>):
+        /// with zero records in the source, the interpreted execution returns exactly the same result as the standard
+        /// <see cref="EnumerableQuery{T}"/> and is strictly cheaper, because the expression compilation cost is paid
+        /// per query execution, not per record. Query expressions that cannot be interpreted still fall back
+        /// to the standard behavior, see <see cref="InterpretedQueryable{T}"/>.
+        /// <para>
+        /// A single instance is cached for each element type: the returned query is immutable, it reads the source
+        /// collection on each execution, and <c>Array.Empty&lt;T&gt;()</c> is a shared singleton instance.
+        /// Composing additional query operators over the returned instance creates new instances,
+        /// it does not modify the cached one.
+        /// </para>
+        /// </remarks>
+        public static IQueryable<T> EmptyInterpreted<T>() => EmptyInterpretedQuery<T>.Instance;
+
         #region Implementation
+
+        private static class EmptyInterpretedQuery<T>
+        {
+            /// <summary>
+            /// The threshold is 1, so that the empty source (0 records) is always below the threshold,
+            /// and the query is always interpreted.
+            /// </summary>
+            public static readonly InterpretedQueryable<T> Instance = new InterpretedQueryable<T>(Array.Empty<T>(), 1);
+        }
 
         private static readonly ConcurrentDictionary<Type, Func<IEnumerable, int, IEnumerable>> _untypedOptimizers =
             new ConcurrentDictionary<Type, Func<IEnumerable, int, IEnumerable>>();

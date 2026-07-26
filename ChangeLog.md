@@ -38,6 +38,12 @@
     (default 1000). Larger data sets, and any query expression that cannot be interpreted, use the standard
     .NET behavior. The threshold default is derived from a measured compiled-vs-interpreted break-even point
     (6000-9500 records, documented in the `OptimizeInMemoryQueryableThreshold` option remarks).
+  * Independently of the option, the *empty* queries that are created by the framework are always executed with
+    the expression interpreter: the generated `Filter(query, ids)` method for an empty list of IDs (used by the
+    generated `Save` method when loading the old values, and by the `Lock*` concepts), and the deny-all row
+    permissions filter. With zero records in the source, the interpreted execution returns exactly the same
+    result and is always cheaper, because the expression compilation cost is paid per query execution,
+    not per record.
   * Optional diagnostics: assign the `QueryableHelper.Telemetry` callback to record row count, expression shape
     and execution time for each optimized query execution.
 

@@ -63,7 +63,10 @@ namespace Rhetos.Dom.DefaultConcepts
         {
             RecognizeConstantExpression(ref expression);
             if (expression == _selectAll) return source;
-            else if (expression == _selectNone) return (Array.Empty<T>()).AsQueryable();
+            // The deny-all filter returns an interpreted empty query instead of Array.Empty<T>().AsQueryable(),
+            // because the standard EnumerableQuery would compile the composed query expression to IL code
+            // on each execution, even though there are no records to read. See QueryableHelper.EmptyInterpreted.
+            else if (expression == _selectNone) return QueryableHelper.EmptyInterpreted<T>();
             else return source.Where(expression);
         }
 
