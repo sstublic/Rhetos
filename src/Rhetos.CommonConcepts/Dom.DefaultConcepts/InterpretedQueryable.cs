@@ -51,29 +51,39 @@ namespace Rhetos.Dom.DefaultConcepts
         public Type ElementType { get; }
 
         /// <summary>
-        /// Number of records in <see cref="Items"/> when the queryable was created.
-        /// It is used only for deciding whether to interpret the query or to use the standard queryable behavior.
-        /// </summary>
-        public int Count { get; }
-
-        /// <summary>
-        /// The query is interpreted if <see cref="Count"/> is smaller than the threshold,
+        /// The query is interpreted if <see cref="GetCurrentCount"/> is smaller than the threshold,
         /// otherwise the standard <see cref="EnumerableQuery{T}"/> behavior is used.
         /// </summary>
         public int Threshold { get; }
 
         private readonly Type _itemsInterfaceType;
 
-        private IQueryable _standardQuery;
+        private readonly Func<int> _countGetter;
 
-        public InterpretedQuerySource(IEnumerable items, Type elementType, int count, int threshold)
+        private volatile IQueryable _standardQuery;
+
+        public InterpretedQuerySource(IEnumerable items, Type elementType, int threshold)
         {
             Items = items;
             ElementType = elementType;
-            Count = count;
             Threshold = threshold;
             _itemsInterfaceType = typeof(IEnumerable<>).MakeGenericType(elementType);
+
+            // Every source is a counted collection by construction (see the public InterpretedQueryable<T> constructor
+            // and QueryableHelper.GetKnownCount), so the count getter is created here once, without per-call reflection.
+            if (items is not ICollection)
+                _countGetter = typeof(IReadOnlyCollection<>).MakeGenericType(elementType)
+                    .GetProperty(nameof(IReadOnlyCollection<object>.Count))
+                    .GetGetMethod()
+                    .CreateDelegate<Func<int>>(items);
         }
+
+        /// <summary>
+        /// The current number of records in <see cref="Items"/>. It is read on each query execution,
+        /// since the source collection may be modified after the queryable is created.
+        /// It is used only for deciding whether to interpret the query or to use the standard queryable behavior.
+        /// </summary>
+        public int GetCurrentCount() => Items is ICollection collection ? collection.Count : _countGetter();
 
         /// <summary>
         /// <c>IEnumerable&lt;<see cref="ElementType"/>&gt;</c>, the declared type of the source constant
@@ -89,7 +99,8 @@ namespace Rhetos.Dom.DefaultConcepts
         {
             get
             {
-                // No need for locking: creating a duplicate instance would be harmless, since it is stateless.
+                // No need for locking: creating a duplicate instance in a concurrent race would be harmless, since it is stateless.
+                // The volatile field publishes a fully constructed, effectively immutable instance to other threads.
                 _standardQuery ??= (IQueryable)Activator.CreateInstance(typeof(EnumerableQuery<>).MakeGenericType(ElementType), Items);
                 return _standardQuery;
             }
@@ -126,7 +137,7 @@ namespace Rhetos.Dom.DefaultConcepts
         public InterpretedQueryable(IReadOnlyCollection<T> source, int threshold)
         {
             ArgumentNullException.ThrowIfNull(source);
-            _source = new InterpretedQuerySource(source, typeof(T), source.Count, threshold);
+            _source = new InterpretedQuerySource(source, typeof(T), threshold);
             _expression = Expression.Constant(this);
         }
 
@@ -168,6 +179,8 @@ namespace Rhetos.Dom.DefaultConcepts
         public IQueryable<TElement> CreateQuery<TElement>(Expression expression)
         {
             ArgumentNullException.ThrowIfNull(expression);
+            if (!typeof(IQueryable<TElement>).IsAssignableFrom(expression.Type))
+                throw new ArgumentException($"The expression type '{expression.Type}' is not assignable to '{typeof(IQueryable<TElement>)}'.", nameof(expression));
             return new InterpretedQueryable<TElement>(_source, expression);
         }
 
@@ -211,7 +224,7 @@ namespace Rhetos.Dom.DefaultConcepts
             }
             else
             {
-                Expression interpretedExpression = _source.Count < _source.Threshold
+                Expression interpretedExpression = _source.GetCurrentCount() < _source.Threshold
                     ? InterpretedQueryRewriter.TryRewrite(expression)
                     : null;
 
@@ -222,7 +235,7 @@ namespace Rhetos.Dom.DefaultConcepts
                     : ExecuteWithStandardQueryable(expression);
             }
 
-            telemetry?.Invoke(new InterpretedQueryTelemetry(expression.ToString(), _source.Count, stopwatch.Elapsed, interpreted));
+            telemetry?.Invoke(new InterpretedQueryTelemetry(expression.ToString(), _source.GetCurrentCount(), stopwatch.Elapsed, interpreted));
             return result;
         }
 
@@ -335,6 +348,13 @@ namespace Rhetos.Dom.DefaultConcepts
             if (node.Value is IInterpretedQueryable query)
             {
                 var source = query.QuerySource;
+                if (source.GetCurrentCount() >= source.Threshold)
+                {
+                    // A composed query (e.g. Concat or Join) may contain multiple sources. Each source is checked
+                    // against its own threshold here, so that a query over a large source is never interpreted.
+                    _failed = true;
+                    return node;
+                }
                 return Expression.Constant(source.Items, source.ItemsInterfaceType);
             }
             return node;

@@ -117,7 +117,7 @@ namespace Rhetos.CommonConcepts.Test
                 QueryableHelper.Telemetry = null;
             }
             foreach (var record in records)
-                Console.WriteLine($"[Telemetry] Interpreted={record.Interpreted}, SourceCount={record.SourceCount}, Elapsed={record.Elapsed}, Query={record.ExpressionShape}");
+                Console.WriteLine($"[Telemetry] Interpreted={record.Interpreted}, SourceCount={record.SourceCount}, Overhead={record.Overhead}, Query={record.ExpressionShape}");
             return records;
         }
 
@@ -474,6 +474,143 @@ namespace Rhetos.CommonConcepts.Test
 
             public static IEnumerable<Book> FirstTwo(IEnumerable<Book> source)
                 => source.Take(2);
+        }
+
+        /// <summary>
+        /// A composed query may contain multiple wrapped sources (e.g. Concat). If any of the sources
+        /// has reached its own threshold, the whole query must fall back to the standard behavior.
+        /// </summary>
+        [TestMethod]
+        public void FallbackOnLargeSecondSourceInConcat()
+        {
+            var firstSource = TestBooks().Take(2).ToList();
+            var secondSource = TestBooks();
+
+            List<Book> withFallback = null;
+            List<Book> interpreted = null;
+
+            var telemetry = RecordTelemetry(() =>
+            {
+                var first = new InterpretedQueryable<Book>(firstSource, NoFallbackThreshold);
+                var secondLarge = new InterpretedQueryable<Book>(secondSource, secondSource.Count);
+                var secondSmall = new InterpretedQueryable<Book>(secondSource, NoFallbackThreshold);
+
+                withFallback = first.Concat(secondLarge).ToList();
+                interpreted = first.Concat(secondSmall).ToList();
+            });
+
+            string expected = TestUtility.Dump(firstSource.AsQueryable().Concat(secondSource).ToList());
+            Assert.AreEqual(expected, TestUtility.Dump(withFallback));
+            Assert.AreEqual(expected, TestUtility.Dump(interpreted));
+
+            Assert.AreEqual("False, True", TestUtility.Dump(telemetry, record => record.Interpreted));
+            Assert.AreEqual("2, 2", TestUtility.Dump(telemetry, record => record.SourceCount),
+                "The telemetry reports the count of the executing query's own source (the first source).");
+        }
+
+        /// <summary>
+        /// Same as <see cref="FallbackOnLargeSecondSourceInConcat"/>, for a query operator
+        /// where the second source is a separate argument (Queryable.Join).
+        /// </summary>
+        [TestMethod]
+        public void FallbackOnLargeSecondSourceInJoin()
+        {
+            var outerSource = TestBooks().Take(2).ToList();
+            var innerSource = TestBooks();
+
+            List<string> withFallback = null;
+            List<string> interpreted = null;
+
+            var telemetry = RecordTelemetry(() =>
+            {
+                var outer = new InterpretedQueryable<Book>(outerSource, NoFallbackThreshold);
+                var innerLarge = new InterpretedQueryable<Book>(innerSource, innerSource.Count);
+                var innerSmall = new InterpretedQueryable<Book>(innerSource, NoFallbackThreshold);
+
+                withFallback = outer.Join(innerLarge, o => o.ID, i => i.ID, (o, i) => o.Name + ":" + i.Pages).ToList();
+                interpreted = outer.Join(innerSmall, o => o.ID, i => i.ID, (o, i) => o.Name + ":" + i.Pages).ToList();
+            });
+
+            string expected = TestUtility.Dump(outerSource.AsQueryable().Join(innerSource, o => o.ID, i => i.ID, (o, i) => o.Name + ":" + i.Pages).ToList());
+            Assert.AreEqual(expected, TestUtility.Dump(withFallback));
+            Assert.AreEqual(expected, TestUtility.Dump(interpreted));
+
+            Assert.AreEqual("False, True", TestUtility.Dump(telemetry, record => record.Interpreted));
+        }
+
+        /// <summary>
+        /// The interpret decision uses the live count of the source collection at each query execution,
+        /// not a snapshot from the time the queryable was created.
+        /// </summary>
+        [TestMethod]
+        public void FallbackOnSourceGrowthOverThreshold()
+        {
+            var source = TestBooks();
+            Assert.AreEqual(5, source.Count);
+            var query = new InterpretedQueryable<Book>(source, 6).Where(book => book.Name != null);
+
+            List<Book> beforeGrowth = null;
+            List<Book> afterGrowth = null;
+            List<Book> afterShrink = null;
+
+            var telemetry = RecordTelemetry(() =>
+            {
+                beforeGrowth = query.ToList();
+
+                source.Add(new Book { ID = Id(6), Name = "c1", Pages = 500 });
+                afterGrowth = query.ToList();
+
+                source.RemoveAt(0);
+                afterShrink = query.ToList();
+            });
+
+            Assert.AreEqual("a1, b1, a2, b2", TestUtility.Dump(beforeGrowth));
+            Assert.AreEqual("a1, b1, a2, b2, c1", TestUtility.Dump(afterGrowth), "The query must read the current source content, including the added record.");
+            Assert.AreEqual("b1, a2, b2, c1", TestUtility.Dump(afterShrink));
+
+            Assert.AreEqual("True, False, True", TestUtility.Dump(telemetry, record => record.Interpreted));
+            Assert.AreEqual("5, 6, 5", TestUtility.Dump(telemetry, record => record.SourceCount), "The telemetry reports the live source count at each execution.");
+        }
+
+        #endregion
+        //=========================================================================
+        #region Query provider validation
+
+        /// <summary>
+        /// Same as the standard <see cref="EnumerableQuery{T}"/> provider, CreateQuery must immediately reject
+        /// an expression whose type is not compatible with the requested element type.
+        /// </summary>
+        [TestMethod]
+        public void CreateQueryValidatesExpressionElementType()
+        {
+            var wrapper = NewWrapper();
+
+            var exception = TestUtility.ShouldFail<ArgumentException>(
+                () => wrapper.Provider.CreateQuery<BookInfo>(wrapper.Expression),
+                "is not assignable to");
+            Assert.AreEqual("expression", exception.ParamName);
+            TestUtility.AssertContains(exception.Message, typeof(IQueryable<BookInfo>).ToString());
+
+            // The standard EnumerableQuery provider reports the same exception type for the same call.
+            var standardQuery = TestBooks().AsQueryable();
+            TestUtility.ShouldFail<ArgumentException>(() => standardQuery.Provider.CreateQuery<BookInfo>(standardQuery.Expression));
+        }
+
+        /// <summary>
+        /// CreateQuery with a base element type over a covariant queryable expression is valid,
+        /// same as with the standard <see cref="EnumerableQuery{T}"/> provider.
+        /// </summary>
+        [TestMethod]
+        public void CreateQueryAllowsCovariantElementType()
+        {
+            var wrapper = NewWrapper();
+            var namedQuery = wrapper.Where(book => book.Name != null); // The expression type is IQueryable<Book>.
+
+            var covariantNamed = wrapper.Provider.CreateQuery<INamed>(namedQuery.Expression);
+            Assert.AreEqual("a1, b1, a2, b2", TestUtility.Dump(covariantNamed.ToList()));
+
+            var covariantObject = wrapper.Provider.CreateQuery<object>(namedQuery.Expression);
+            Assert.AreEqual("a1, b1, a2, b2", TestUtility.Dump(covariantObject.ToList()));
         }
 
         #endregion

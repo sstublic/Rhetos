@@ -107,6 +107,24 @@ namespace Rhetos.CommonConcepts.Test
             Assert.AreEqual("a1, b1, a2", TestUtility.Dump(optimized.ToList()));
         }
 
+        /// <summary>
+        /// A source with the record count at or over the threshold is not wrapped:
+        /// the standard queryable behavior would be used anyway, so the query is returned unchanged.
+        /// </summary>
+        [TestMethod]
+        public void SourceAtThresholdIsNotWrapped()
+        {
+            var query = TestItems().AsQueryable(); // 3 records.
+
+            Assert.AreSame(query, QueryableHelper.OptimizeInMemoryQueryable(query, 3));
+            Assert.AreSame(query, QueryableHelper.OptimizeInMemoryQueryable(query, 2));
+            Assert.IsTrue(QueryableHelper.OptimizeInMemoryQueryable(query, 4) is InterpretedQueryable<SimpleEntity>,
+                "The query below the threshold is wrapped.");
+
+            IEnumerable untyped = query;
+            Assert.AreSame(untyped, QueryableHelper.OptimizeInMemoryQueryable(untyped, 3));
+        }
+
         [TestMethod]
         public void OptimizeIsIdempotent()
         {
@@ -345,9 +363,11 @@ namespace Rhetos.CommonConcepts.Test
         {
             var records = new List<InterpretedQueryTelemetry>();
 
-            // The test data has 3 records, the threshold is 3: the standard queryable behavior is expected.
-            var optimized = QueryableHelper.OptimizeFilterResult(TestItems().AsQueryable(), Options(optimize: true, threshold: 3));
-            Assert.IsTrue(optimized is InterpretedQueryable<SimpleEntity>, $"Unexpected result type {optimized.GetType()}.");
+            // The test data has 3 records, the threshold is 3: the query is not wrapped,
+            // since the standard queryable behavior would be used anyway.
+            var query = TestItems().AsQueryable();
+            var optimized = QueryableHelper.OptimizeFilterResult(query, Options(optimize: true, threshold: 3));
+            Assert.AreSame(query, optimized, $"The query at the threshold must be returned unchanged, not {optimized.GetType()}.");
 
             QueryableHelper.Telemetry = records.Add;
             try
@@ -359,13 +379,12 @@ namespace Rhetos.CommonConcepts.Test
                 QueryableHelper.Telemetry = null;
             }
 
-            Assert.AreEqual(1, records.Count);
-            Assert.AreEqual(3, records[0].SourceCount);
-            Assert.IsFalse(records[0].Interpreted, "The query should not be interpreted at the threshold.");
+            Assert.AreEqual(0, records.Count, "The unwrapped query must not report telemetry.");
 
-            // The same query below the threshold is interpreted.
-            records.Clear();
+            // The same query below the threshold is wrapped and interpreted.
             var optimizedSmall = QueryableHelper.OptimizeFilterResult(TestItems().AsQueryable(), Options(optimize: true, threshold: 4));
+            Assert.IsTrue(optimizedSmall is InterpretedQueryable<SimpleEntity>, $"Unexpected result type {optimizedSmall.GetType()}.");
+
             QueryableHelper.Telemetry = records.Add;
             try
             {
@@ -377,6 +396,7 @@ namespace Rhetos.CommonConcepts.Test
             }
 
             Assert.AreEqual(1, records.Count);
+            Assert.AreEqual(3, records[0].SourceCount);
             Assert.IsTrue(records[0].Interpreted, "The query should be interpreted below the threshold.");
         }
 

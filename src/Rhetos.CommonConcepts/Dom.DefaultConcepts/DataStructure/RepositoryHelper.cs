@@ -179,7 +179,7 @@ namespace Rhetos.Dom.DefaultConcepts
         public static string GenerateFilterMethod(string queryableType, string parameters, string implementationBody, string arguments) =>
 $@"public {queryableType} Filter{parameters}
         {{
-            return Rhetos.Dom.DefaultConcepts.QueryableHelper.OptimizeFilterResult(Filter_Impl({arguments}), {RuntimeOptionsMember});
+            return Rhetos.Dom.DefaultConcepts.QueryableHelper.OptimizeFilterResult(this.Filter_Impl({arguments}), this.{RuntimeOptionsMember});
         }}
 
         private {queryableType} Filter_Impl{parameters}{implementationBody}

@@ -74,7 +74,7 @@ namespace Rhetos.Dom.DefaultConcepts
         /// optimization to be applied. If the source has this many records or more, the standard .NET behavior is used.
         /// </summary>
         /// <remarks>
-        /// The default value is derived from a micro-benchmark (BenchmarkDotNet, .NET 10) comparing the interpreted
+        /// The default value is derived from micro-benchmark measurements (BenchmarkDotNet, .NET 10) comparing the interpreted
         /// and the compiled execution of representative composed queries (stacked Where, OrderBy/ThenBy, Skip/Take,
         /// Select projection) over an in-memory list: the measured break-even is between 6000 records (scalar Count
         /// queries) and 9500 records (materializing queries). The default value leaves a safety margin below the

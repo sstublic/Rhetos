@@ -42,14 +42,23 @@
     `QueryFilter` and similar concepts): the generated repository's `Filter(IQueryable, parameter)` method now
     wraps the result of the filter implementation. It is also applied on the generic reading and filtering
     features that resolve those methods with reflection (see `GenericRepository`).
+  * The generated repository class of every data structure with such filters now contains
+    the `_commonConceptsRuntimeOptions` member, injected with the `RepositoryUses` concept (previously it was
+    generated only for entities with money rounding). If an application or a plugin declares `RepositoryUses`
+    with the property name `_commonConceptsRuntimeOptions`, it must specify the exact property type string
+    `Rhetos.Dom.DefaultConcepts.CommonConceptsRuntimeOptions`, otherwise the DSL model validation will fail
+    the build with an error on two concepts with the same key but different values.
   * Independently of the option, the *empty* queries that are created by the framework are always executed with
     the expression interpreter: the generated `Filter(query, ids)` method for an empty list of IDs (used by the
     generated `Save` method when loading the old values, and by the `Lock*` concepts), and the deny-all row
     permissions filter. With zero records in the source, the interpreted execution returns exactly the same
     result and is always cheaper, because the expression compilation cost is paid per query execution,
     not per record.
-  * Optional diagnostics: assign the `QueryableHelper.Telemetry` callback to record row count, expression shape
-    and execution time for each optimized query execution.
+  * A subtle breaking change: these framework-created empty queries are no longer `System.Linq.EnumerableQuery`
+    instances. Application and plugin code should not test for the concrete query class; the contract
+    is `IQueryable<T>`.
+  * Optional diagnostics: assign the `QueryableHelper.Telemetry` callback to record source record count,
+    expression shape and per-execution overhead for each optimized query execution.
 
 ### Internal improvements
 

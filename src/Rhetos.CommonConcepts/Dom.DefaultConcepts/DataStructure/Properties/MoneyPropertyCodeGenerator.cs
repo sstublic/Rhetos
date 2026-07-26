@@ -72,13 +72,7 @@ namespace Rhetos.Dom.DefaultConcepts
             var newConcepts = new List<IConceptInfo>();
 
             if (conceptInfo.DataStructure is IWritableOrmDataStructure)
-                newConcepts.Add(
-                    new RepositoryUsesInfo
-                    {
-                        DataStructure = conceptInfo.DataStructure,
-                        PropertyName = "_commonConceptsRuntimeOptions",
-                        PropertyType = "Rhetos.Dom.DefaultConcepts.CommonConceptsRuntimeOptions"
-                    });
+                newConcepts.Add(RepositoryHelper.CreateRuntimeOptionsUses(conceptInfo.DataStructure));
 
             return newConcepts;
         }
