@@ -17,10 +17,13 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
+using Microsoft.EntityFrameworkCore.Query;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
+using Rhetos.CommonConcepts.Test.Mocks;
 using Rhetos.Dom.DefaultConcepts;
 using Rhetos.Processing.DefaultCommands;
 using Rhetos.TestCommon;
+using Rhetos.Utilities;
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -95,7 +98,7 @@ namespace Rhetos.CommonConcepts.Test
             Assert.AreEqual(expected, actual);
         }
 
-        private static string Format(object value)
+        internal static string Format(object value)
         {
             if (value is string text)
                 return text;
@@ -104,7 +107,7 @@ namespace Rhetos.CommonConcepts.Test
             return value?.ToString() ?? "<null>";
         }
 
-        private static List<InterpretedQueryTelemetry> RecordTelemetry(Action action)
+        internal static List<InterpretedQueryTelemetry> RecordTelemetry(Action action)
         {
             var records = new List<InterpretedQueryTelemetry>();
             QueryableHelper.Telemetry = records.Add;
@@ -572,6 +575,21 @@ namespace Rhetos.CommonConcepts.Test
             Assert.AreEqual("5, 6, 5", TestUtility.Dump(telemetry, record => record.SourceCount), "The telemetry reports the live source count at each execution.");
         }
 
+        /// <summary>
+        /// The GenericFilterHelper "In" filter with the EF6 ORM utility embeds the filter value in the predicate
+        /// as a <see cref="ConstantExpression"/>. If the value is a composed interpreted query, the standard fallback
+        /// of the outer query must execute the subquery with its query operators, not only read its source.
+        /// </summary>
+        [TestMethod]
+        public void FallbackExecutesComposedSubqueryEmbeddedAsConstant()
+        {
+            var subquery = NewWrapper().Where(book => book.Pages == 200).Select(book => book.ID);
+            var genericFilterHelper = new GenericFilterHelper(new DataStructureReadParametersStub(), new ConsoleLogProvider(), new Ef6OrmUtility());
+            var predicate = genericFilterHelper.ToExpression<Book>([new PropertyFilter { Property = nameof(Book.ID), Operation = "In", Value = subquery }]);
+
+            AssertSameAsEnumerableQuery(query => query.Where(predicate).ToList(), threshold: 0);
+        }
+
         #endregion
         //=========================================================================
         #region Query provider validation
@@ -639,6 +657,71 @@ namespace Rhetos.CommonConcepts.Test
 
             var query = new InterpretedQueryable<Book>(TestBooks(), NoFallbackThreshold).Where(optimized);
             Assert.AreEqual("a1, a2", TestUtility.Dump(query.OrderBy(book => book.Name).ToList()));
+        }
+
+        #endregion
+        //=========================================================================
+        #region Entity Framework Core compatibility
+
+        /// <summary>
+        /// EF Core prints the query expression tree when a query that embeds the in-memory query fails translation,
+        /// and at the debug log level. Its <see cref="ExpressionPrinter"/> prints a constant <see cref="IQueryable"/>
+        /// that is not an <see cref="EnumerableQuery"/> by printing the queryable's <see cref="IQueryable.Expression"/>,
+        /// so an expression tree that contains its own query as a constant makes the printer recurse
+        /// until the process crashes with a stack overflow.
+        /// </summary>
+        /// <remarks>
+        /// The EF Core funcletizer either inlines the expression of a captured queryable or keeps the queryable as a constant,
+        /// so both forms are printed. The operators are expected in both printed forms, which also pins that
+        /// <see cref="InterpretedQueryable{T}"/> is not an <see cref="EnumerableQuery"/>: EF Core's printer enumerates
+        /// (executes) an <see cref="EnumerableQuery"/> constant instead of printing its expression.
+        /// </remarks>
+        private static void AssertPrintableByEfCore(IQueryable query, params string[] expectedOperators)
+        {
+            TestUtility.AssertContains(PrintByEfCore(query.Expression), expectedOperators);
+            TestUtility.AssertContains(PrintByEfCore(Expression.Constant(query)), expectedOperators);
+        }
+
+        private static string PrintByEfCore(Expression expression)
+        {
+            string printed = ExpressionPrinter.Print(expression);
+            Console.WriteLine($"[{nameof(PrintByEfCore)}] {printed}");
+            Assert.IsFalse(string.IsNullOrEmpty(printed), $"{nameof(ExpressionPrinter)} returned an empty text.");
+            return printed;
+        }
+
+        [TestMethod]
+        public void EmptyInterpretedExpressionIsPrintableByEfCore()
+        {
+            var empty = QueryableHelper.EmptyInterpreted<Book>();
+
+            AssertPrintableByEfCore(empty);
+            AssertPrintableByEfCore(
+                empty.Where(book => book.Name != null).Select(book => book.ID),
+                nameof(Queryable.Where), nameof(Queryable.Select));
+        }
+
+        [TestMethod]
+        public void InterpretedQueryableExpressionIsPrintableByEfCore()
+        {
+            var wrapper = NewWrapper();
+
+            AssertPrintableByEfCore(wrapper);
+            AssertPrintableByEfCore(
+                wrapper.Where(book => book.Name != null).Select(book => book.ID),
+                nameof(Queryable.Where), nameof(Queryable.Select));
+        }
+
+        [TestMethod]
+        public void OptimizedInMemoryQueryableExpressionIsPrintableByEfCore()
+        {
+            var optimized = QueryableHelper.OptimizeInMemoryQueryable(TestBooks().AsQueryable().Where(book => book.Name != null), NoFallbackThreshold);
+            Assert.IsTrue(optimized is InterpretedQueryable<Book>, $"Unexpected result type {optimized.GetType()}.");
+
+            AssertPrintableByEfCore(optimized, nameof(Queryable.Where));
+            AssertPrintableByEfCore(
+                optimized.Select(book => book.ID),
+                nameof(Queryable.Where), nameof(Queryable.Select));
         }
 
         #endregion

@@ -316,6 +316,51 @@ namespace Rhetos.CommonConcepts.Test
             Assert.AreSame(empty, QueryableHelper.OptimizeInMemoryQueryable(empty, NoFallbackThreshold));
         }
 
+        /// <summary>
+        /// Each query composed over the empty query returns the same result as the standard <see cref="EnumerableQuery{T}"/>
+        /// over an empty array, and each execution is interpreted, without compiling the expression tree to IL code.
+        /// </summary>
+        [TestMethod]
+        public void EmptyInterpretedComposedQueriesMatchStandardEmptyQueryAndAreInterpreted()
+        {
+            Func<IQueryable<SimpleEntity>, object>[] executeQueries =
+            [
+                query => query.ToList(),
+                query => query.Select(item => item.Name).ToList(),
+                query => query.Where(item => item.Name != null).ToList(),
+                query => query.Where(item => item.Name != null).Select(item => item.ID).ToList(),
+                query => query.Count(),
+                query => query.Count(item => item.Name != null),
+                query => query.Any(),
+                query => query.Any(item => item.Name != null),
+                query => query.FirstOrDefault(),
+                query => query.Where(item => item.Name != null).FirstOrDefault(),
+                query => query.Select(item => item.Name).FirstOrDefault(),
+            ];
+
+            List<object> ExecuteQueries(IQueryable<SimpleEntity> source)
+            {
+                var results = new List<object>();
+                foreach (var executeQuery in executeQueries)
+                    results.Add(executeQuery(source));
+                return results;
+            }
+
+            var standardResults = ExecuteQueries(Array.Empty<SimpleEntity>().AsQueryable());
+
+            List<object> interpretedResults = null;
+            var telemetry = InterpretedQueryableTest.RecordTelemetry(
+                () => interpretedResults = ExecuteQueries(QueryableHelper.EmptyInterpreted<SimpleEntity>()));
+
+            Assert.AreEqual(
+                TestUtility.Dump(standardResults, InterpretedQueryableTest.Format),
+                TestUtility.Dump(interpretedResults, InterpretedQueryableTest.Format));
+            Assert.AreEqual(
+                TestUtility.Dump(Enumerable.Repeat(true, executeQueries.Length)),
+                TestUtility.Dump(telemetry, record => record.Interpreted),
+                "Each query execution must be interpreted, the telemetry is reported once per execution.");
+        }
+
         #endregion
         //=========================================================================
         #region Optimizing the filter result

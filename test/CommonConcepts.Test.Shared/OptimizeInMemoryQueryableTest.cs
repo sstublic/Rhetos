@@ -174,5 +174,88 @@ namespace CommonConcepts.Test
                     Assert.AreEqual("", TestUtility.Dump(result.ToList()));
                 }
         }
+
+        //=========================================================================
+        // Empty query created by the framework, used as a subquery in an ORM query (unconditional).
+
+        [TestMethod]
+        public void RowPermissionsDenyAllResultInOrmSubqueryBehavesAsStandardEmptyQuery()
+        {
+            foreach (bool optimizeInMemoryQueryable in new[] { false, true })
+                using (var scope = CreateScope(optimizeInMemoryQueryable))
+                {
+                    var repository = scope.Resolve<Common.DomRepository>();
+                    var userName = scope.Resolve<IUserInfo>().UserName;
+
+                    // ComplexRP row permissions deny all records to a user without a ComplexRPPermissions record.
+                    repository.TestRowPermissions.ComplexRPPermissions.Delete(
+                        repository.TestRowPermissions.ComplexRPPermissions.Load(permission => permission.userName == userName));
+                    repository.TestRowPermissions.ComplexRP.Insert(new TestRowPermissions.ComplexRP { ID = Guid.NewGuid(), value = 1 });
+
+                    var allowedItems = repository.TestRowPermissions.ComplexRP.Query(new Common.RowPermissionsReadItems());
+                    Assert.AreSame(QueryableHelper.EmptyInterpreted<Common.Queryable.TestRowPermissions_ComplexRP>(), allowedItems);
+
+                    AssertSubqueryBehavesAsStandardEmptyQuery(allowedItems, subquery =>
+                    {
+                        var allowedIds = subquery.Select(item => item.ID);
+                        return repository.TestRowPermissions.ComplexRP.Query()
+                            .Where(item => allowedIds.Contains(item.ID))
+                            .Select(item => item.ID);
+                    });
+                }
+        }
+
+        [TestMethod]
+        public void EmptyIdsFilterResultInOrmSubqueryBehavesAsStandardEmptyQuery()
+        {
+            foreach (bool optimizeInMemoryQueryable in new[] { false, true })
+                using (var scope = CreateScope(optimizeInMemoryQueryable))
+                {
+                    var repository = scope.Resolve<Common.DomRepository>();
+
+                    var parent = new TestGenericFilter.Simple { ID = Guid.NewGuid(), Name = "p" };
+                    repository.TestGenericFilter.Simple.Insert(parent);
+                    repository.TestGenericFilter.Child.Insert(new TestGenericFilter.Child { ID = Guid.NewGuid(), Name = "c", ParentID = parent.ID });
+
+                    var parents = repository.TestGenericFilter.Simple.Filter(repository.TestGenericFilter.Simple.Query(), new List<Guid>());
+                    Assert.AreSame(QueryableHelper.EmptyInterpreted<Common.Queryable.TestGenericFilter_Simple>(), parents);
+
+                    AssertSubqueryBehavesAsStandardEmptyQuery(parents, subquery =>
+                    {
+                        var parentIds = subquery.Select(item => item.ID);
+                        return repository.TestGenericFilter.Child.Query()
+                            .Where(item => parentIds.Contains(item.ParentID.Value))
+                            .Select(item => item.ID);
+                    });
+                }
+        }
+
+        /// <summary>
+        /// Embedding the framework-created empty query in an ORM query behaves the same as embedding
+        /// the standard empty in-memory query (<c>Array.Empty&lt;T&gt;().AsQueryable()</c>).
+        /// </summary>
+        private static void AssertSubqueryBehavesAsStandardEmptyQuery<TEntity>(
+            IQueryable<TEntity> emptyQuery, Func<IQueryable<TEntity>, IQueryable<Guid>> buildOrmQuery)
+        {
+            string outcome = DumpResultOrExceptionType(buildOrmQuery(emptyQuery));
+            string standardOutcome = DumpResultOrExceptionType(buildOrmQuery(Array.Empty<TEntity>().AsQueryable()));
+            Assert.AreEqual(standardOutcome, outcome,
+                $"With the standard empty query: {standardOutcome}. With the framework-created empty query: {outcome}.");
+        }
+
+        /// <summary>
+        /// Reports only the exception type, because the exception message may contain the printed in-memory query type.
+        /// </summary>
+        private static string DumpResultOrExceptionType(IQueryable<Guid> query)
+        {
+            try
+            {
+                return $"Result: [{TestUtility.Dump(query.ToList())}]";
+            }
+            catch (Exception ex)
+            {
+                return $"Exception: {ex.GetType().FullName}";
+            }
+        }
     }
 }

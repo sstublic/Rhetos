@@ -57,6 +57,11 @@
   * A subtle breaking change: these framework-created empty queries are no longer `System.Linq.EnumerableQuery`
     instances. Application and plugin code should not test for the concrete query class; the contract
     is `IQueryable<T>`.
+  * When embedded unexecuted in another ORM query (for example, captured in a predicate), these empty queries behave
+    the same as `Array.Empty<T>().AsQueryable()`: EF Core cannot translate an in-memory query over entities to SQL,
+    and throws an exception. To combine a data structure's row permissions with another ORM query, embed the row
+    permissions expression instead:
+    `repository.X.Query().Where(repository.X.GetRowPermissionsReadExpression(repository.X.Query(), repository, executionContext))`.
   * Optional diagnostics: assign the `QueryableHelper.Telemetry` callback to record source record count,
     expression shape and per-execution overhead for each optimized query execution.
 

@@ -115,23 +115,18 @@ namespace Rhetos.Dom.DefaultConcepts
         /// </remarks>
         public static IQueryable<T> OptimizeInMemoryQueryable<T>(IQueryable<T> query, int threshold)
         {
-            if (query is IInterpretedQueryable)
-                return query; // Already optimized.
-
             if (query is not EnumerableQuery)
-                return query; // An ORM query or a custom queryable implementation.
+                return query; // Already optimized, an ORM query or a custom queryable implementation.
 
-            InterpretedQuerySource source = TryCreateSource(query, threshold);
-            if (source == null)
+            IQueryable interpretedSourceQuery = TryCreateInterpretedSourceQuery(query, threshold);
+            if (interpretedSourceQuery == null)
                 return query; // The source is not a materialized collection, or it could not be read.
-
-            IQueryable interpretedSourceQuery = CreateSourceQueryable(source);
 
             if (query.Expression is ConstantExpression sourceConstant && ReferenceEquals(sourceConstant.Value, query))
                 return (IQueryable<T>)interpretedSourceQuery; // The query has no operators applied, the element type is T.
 
             // Keeping the query operators that are already applied, and replacing the source of the query.
-            Expression optimizedExpression = new InterpretedSourceRewriter(interpretedSourceQuery).Visit(query.Expression);
+            Expression optimizedExpression = new InterpretedSourceRewriter(interpretedSourceQuery.Expression).Visit(query.Expression);
             return interpretedSourceQuery.Provider.CreateQuery<T>(optimizedExpression);
         }
 
@@ -141,11 +136,8 @@ namespace Rhetos.Dom.DefaultConcepts
         /// </summary>
         public static IEnumerable OptimizeInMemoryQueryable(IEnumerable items, int threshold)
         {
-            if (items is IInterpretedQueryable)
-                return items; // Already optimized.
-
             if (items is not EnumerableQuery)
-                return items; // A materialized list, an ORM query or a custom queryable implementation.
+                return items; // A materialized list, an already optimized query, an ORM query or a custom queryable implementation.
 
             Type elementType = InterpretedQueryUtility.GetQueryElementType(items.GetType());
             if (elementType == null)
@@ -168,11 +160,17 @@ namespace Rhetos.Dom.DefaultConcepts
         /// per query execution, not per record. Query expressions that cannot be interpreted still fall back
         /// to the standard behavior, see <see cref="InterpretedQueryable{T}"/>.
         /// <para>
-        /// A single instance is cached for each element type: the returned query has no observable mutable state
-        /// (its only mutable state is an internal lazily initialized cache, which is thread-safe), it reads the source
-        /// collection on each execution, and <c>Array.Empty&lt;T&gt;()</c> is a shared singleton instance.
+        /// A single instance is cached for each element type: the returned query has no mutable state,
+        /// it reads the source collection on each execution, and <c>Array.Empty&lt;T&gt;()</c> is a shared singleton instance.
         /// Composing additional query operators over the returned instance creates new instances,
         /// it does not modify the cached one.
+        /// </para>
+        /// <para>
+        /// When embedded unexecuted in another ORM query (for example, captured in a predicate), the returned query
+        /// behaves the same as <c>Array.Empty&lt;T&gt;().AsQueryable()</c>: EF Core cannot translate an in-memory query
+        /// over entities to SQL, and throws an exception. To combine a data structure's row permissions with another
+        /// ORM query, embed the row permissions expression instead, which the ORM translates to SQL:
+        /// <c>repository.X.Query().Where(repository.X.GetRowPermissionsReadExpression(repository.X.Query(), repository, executionContext))</c>.
         /// </para>
         /// </remarks>
         public static IQueryable<T> EmptyInterpreted<T>() => EmptyInterpretedQuery<T>.Instance;
@@ -218,23 +216,25 @@ namespace Rhetos.Dom.DefaultConcepts
         private static IEnumerable OptimizeUntyped<T>(IEnumerable query, int threshold)
             => OptimizeInMemoryQueryable((IQueryable<T>)query, threshold);
 
-        private static readonly ConcurrentDictionary<Type, Func<InterpretedQuerySource, IQueryable>> _sourceQueryableFactories =
-            new ConcurrentDictionary<Type, Func<InterpretedQuerySource, IQueryable>>();
+        private static readonly ConcurrentDictionary<Type, Func<IEnumerable, int, IQueryable>> _interpretedSourceQueryFactories =
+            new ConcurrentDictionary<Type, Func<IEnumerable, int, IQueryable>>();
 
-        private static readonly MethodInfo _createSourceQueryableMethod =
-            typeof(QueryableHelper).GetMethod(nameof(CreateSourceQueryableGeneric), BindingFlags.Static | BindingFlags.NonPublic);
+        private static readonly MethodInfo _createInterpretedSourceQueryMethod =
+            typeof(QueryableHelper).GetMethod(nameof(CreateInterpretedSourceQuery), BindingFlags.Static | BindingFlags.NonPublic);
 
-        private static IQueryable CreateSourceQueryable(InterpretedQuerySource source)
-            => _sourceQueryableFactories.GetOrAdd(source.ElementType, CreateSourceQueryableFactory).Invoke(source);
+        private static Func<IEnumerable, int, IQueryable> CreateInterpretedSourceQueryFactory(Type elementType)
+            => _createInterpretedSourceQueryMethod.MakeGenericMethod(elementType).CreateDelegate<Func<IEnumerable, int, IQueryable>>();
 
-        private static Func<InterpretedQuerySource, IQueryable> CreateSourceQueryableFactory(Type elementType)
-            => _createSourceQueryableMethod.MakeGenericMethod(elementType).CreateDelegate<Func<InterpretedQuerySource, IQueryable>>();
-
-#pragma warning disable CA1859 // The return type must match the delegate signature used by CreateSourceQueryableFactory.
-        private static IQueryable CreateSourceQueryableGeneric<T>(InterpretedQuerySource source) => new InterpretedQueryable<T>(source);
+#pragma warning disable CA1859 // The return type must match the delegate signature used by CreateInterpretedSourceQueryFactory.
+        private static IQueryable CreateInterpretedSourceQuery<TSource>(IEnumerable items, int threshold)
+            => new InterpretedQueryable<TSource>(new InterpretedQuerySource<TSource>((IEnumerable<TSource>)items, threshold));
 #pragma warning restore CA1859
 
-        private static InterpretedQuerySource TryCreateSource(IQueryable query, int threshold)
+        /// <summary>
+        /// Returns an <see cref="InterpretedQueryable{T}"/> without query operators, over the source collection
+        /// of the given query, or null if the query's source is not a small materialized collection.
+        /// </summary>
+        private static IQueryable TryCreateInterpretedSourceQuery(IQueryable query, int threshold)
         {
             EnumerableQuery sourceQuery = FindSourceQuery(query.Expression);
             if (sourceQuery == null)
@@ -255,12 +255,12 @@ namespace Rhetos.Dom.DefaultConcepts
             if (count >= threshold)
                 return null; // The standard EnumerableQuery behavior would be used anyway, so the query is not wrapped.
 
-            return new InterpretedQuerySource(items, elementType, threshold);
+            return _interpretedSourceQueryFactories.GetOrAdd(elementType, CreateInterpretedSourceQueryFactory).Invoke(items, threshold);
         }
 
         /// <summary>
-        /// Returns the single <see cref="EnumerableQuery{T}"/> that is the source of the given query expression,
-        /// or null if the expression contains a different number of in-memory queries.
+        /// Returns the single standard <see cref="EnumerableQuery{T}"/> that is the source of the given query expression,
+        /// or null if the expression contains a different number of standard in-memory queries.
         /// </summary>
         private static EnumerableQuery FindSourceQuery(Expression expression)
         {
@@ -269,29 +269,39 @@ namespace Rhetos.Dom.DefaultConcepts
             return finder.SourceQueries.Count == 1 ? finder.SourceQueries[0] : null;
         }
 
+        /// <summary>
+        /// True for a standard in-memory query, false for an already interpreted source (see <see cref="InterpretedQuerySource{T}"/>)
+        /// or any other value.
+        /// </summary>
+        private static bool IsStandardEnumerableQuery(object value) => value is EnumerableQuery and not IInterpretedQuerySource;
+
         private sealed class SourceQueryFinder : ExpressionVisitor
         {
             public List<EnumerableQuery> SourceQueries { get; } = new List<EnumerableQuery>();
 
             protected override Expression VisitConstant(ConstantExpression node)
             {
-                if (node.Value is EnumerableQuery sourceQuery)
-                    SourceQueries.Add(sourceQuery);
+                if (IsStandardEnumerableQuery(node.Value))
+                    SourceQueries.Add((EnumerableQuery)node.Value);
                 return node;
             }
         }
 
+        /// <summary>
+        /// Replaces the standard in-memory source of the query with the root expression of the interpreted source query
+        /// (the <see cref="InterpretedQuerySource{T}"/> constant), the same root as in any other query over that source.
+        /// </summary>
         private sealed class InterpretedSourceRewriter : ExpressionVisitor
         {
-            private readonly ConstantExpression _interpretedSource;
+            private readonly Expression _interpretedSource;
 
-            public InterpretedSourceRewriter(IQueryable interpretedSourceQuery)
+            public InterpretedSourceRewriter(Expression interpretedSource)
             {
-                _interpretedSource = Expression.Constant(interpretedSourceQuery);
+                _interpretedSource = interpretedSource;
             }
 
             protected override Expression VisitConstant(ConstantExpression node)
-                => node.Value is EnumerableQuery ? _interpretedSource : node;
+                => IsStandardEnumerableQuery(node.Value) ? _interpretedSource : node;
         }
 
         private static readonly ConcurrentDictionary<Type, FieldInfo> _enumerableQuerySourceFields =

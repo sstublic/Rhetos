@@ -32,79 +32,76 @@ namespace Rhetos.Dom.DefaultConcepts
     /// Non-generic access to the shared source of an <see cref="InterpretedQueryable{T}"/>,
     /// needed when rewriting the query expression, where the element type is not known at compile time.
     /// </summary>
-    internal interface IInterpretedQueryable
-    {
-        InterpretedQuerySource QuerySource { get; }
-    }
-
-    /// <summary>
-    /// A materialized in-memory collection that is the source of an <see cref="InterpretedQueryable{T}"/>.
-    /// The same instance is shared between all queries that are composed over the same source.
-    /// </summary>
-    internal sealed class InterpretedQuerySource
+    internal interface IInterpretedQuerySource
     {
         /// <summary>
-        /// The source collection. It implements <c>IEnumerable&lt;<see cref="ElementType"/>&gt;</c>.
+        /// The source collection. It implements <see cref="ItemsInterfaceType"/>.
         /// </summary>
-        public IEnumerable Items { get; }
+        IEnumerable Items { get; }
 
-        public Type ElementType { get; }
+        /// <summary>
+        /// <c>IEnumerable&lt;T&gt;</c> of the source element type, the declared type of the source constant
+        /// in the rewritten query expression.
+        /// </summary>
+        Type ItemsInterfaceType { get; }
 
         /// <summary>
         /// The query is interpreted if <see cref="GetCurrentCount"/> is smaller than the threshold,
         /// otherwise the standard <see cref="EnumerableQuery{T}"/> behavior is used.
         /// </summary>
-        public int Threshold { get; }
-
-        private readonly Type _itemsInterfaceType;
-
-        private readonly Func<int> _countGetter;
-
-        private volatile IQueryable _standardQuery;
-
-        public InterpretedQuerySource(IEnumerable items, Type elementType, int threshold)
-        {
-            Items = items;
-            ElementType = elementType;
-            Threshold = threshold;
-            _itemsInterfaceType = typeof(IEnumerable<>).MakeGenericType(elementType);
-
-            // Every source is a counted collection by construction (see the public InterpretedQueryable<T> constructor
-            // and QueryableHelper.GetKnownCount), so the count getter is created here once, without per-call reflection.
-            if (items is not ICollection)
-                _countGetter = typeof(IReadOnlyCollection<>).MakeGenericType(elementType)
-                    .GetProperty(nameof(IReadOnlyCollection<object>.Count))
-                    .GetGetMethod()
-                    .CreateDelegate<Func<int>>(items);
-        }
+        int Threshold { get; }
 
         /// <summary>
         /// The current number of records in <see cref="Items"/>. It is read on each query execution,
         /// since the source collection may be modified after the queryable is created.
         /// It is used only for deciding whether to interpret the query or to use the standard queryable behavior.
         /// </summary>
-        public int GetCurrentCount() => Items is ICollection collection ? collection.Count : _countGetter();
+        int GetCurrentCount();
 
         /// <summary>
-        /// <c>IEnumerable&lt;<see cref="ElementType"/>&gt;</c>, the declared type of the source constant
-        /// in the rewritten query expression.
+        /// The standard .NET query provider (<see cref="EnumerableQuery{T}"/>) over the same source.
+        /// Executing a query with this provider results with exactly the same behavior as if the optimization was not applied.
         /// </summary>
-        public Type ItemsInterfaceType => _itemsInterfaceType;
+        IQueryProvider StandardProvider { get; }
+    }
 
-        /// <summary>
-        /// The standard .NET queryable over the same source.
-        /// Executing a query over this instance results with exactly the same behavior as if the optimization was not applied.
-        /// </summary>
-        public IQueryable StandardQuery
+    /// <summary>
+    /// The source of an <see cref="InterpretedQueryable{T}"/>: a standard <see cref="EnumerableQuery{T}"/>
+    /// over a materialized in-memory collection.
+    /// The same instance is shared between all queries that are composed over the same source.
+    /// </summary>
+    /// <remarks>
+    /// It is the root constant of every query expression over this source. Being an <see cref="EnumerableQuery{T}"/>,
+    /// tools that walk query expressions (the standard <see cref="EnumerableQuery{T}"/> execution, ORM expression
+    /// printers such as EF Core's ExpressionPrinter) treat it as an in-memory value and do not descend into its
+    /// <see cref="IQueryable.Expression"/>. A custom <see cref="IQueryable"/> constant whose expression references
+    /// itself would make such printers recurse infinitely.
+    /// <para>
+    /// It is immutable after construction (an <see cref="EnumerableQuery{T}"/> created over a collection
+    /// never writes its fields), so it is safe to share between threads.
+    /// </para>
+    /// </remarks>
+    internal sealed class InterpretedQuerySource<T> : EnumerableQuery<T>, IInterpretedQuerySource
+    {
+        private readonly IEnumerable<T> _items;
+
+        public InterpretedQuerySource(IEnumerable<T> items, int threshold) : base(items)
         {
-            get
-            {
-                // No need for locking: creating a duplicate instance in a concurrent race would be harmless, since it is stateless.
-                // The volatile field publishes a fully constructed, effectively immutable instance to other threads.
-                _standardQuery ??= (IQueryable)Activator.CreateInstance(typeof(EnumerableQuery<>).MakeGenericType(ElementType), Items);
-                return _standardQuery;
-            }
+            _items = items;
+            Threshold = threshold;
         }
+
+        public IEnumerable Items => _items;
+
+        public Type ItemsInterfaceType => typeof(IEnumerable<T>);
+
+        public int Threshold { get; }
+
+        // Every source is a counted collection by construction
+        // (see the public InterpretedQueryable<T> constructor and QueryableHelper.GetKnownCount).
+        public int GetCurrentCount() => _items is ICollection collection ? collection.Count : ((IReadOnlyCollection<T>)_items).Count;
+
+        public IQueryProvider StandardProvider => this;
     }
 
 #pragma warning disable CA1710 // Identifiers should have correct suffix. This is a query, not a collection; same as the standard EnumerableQuery<T> class.
@@ -116,7 +113,7 @@ namespace Rhetos.Dom.DefaultConcepts
     /// where the query compilation takes more time than the query execution.
     /// </summary>
     /// <remarks>
-    /// If the source has too many records (see <see cref="InterpretedQuerySource.Threshold"/>), or if the query
+    /// If the source has too many records (see <see cref="IInterpretedQuerySource.Threshold"/>), or if the query
     /// expression contains anything that this class cannot interpret, the query is executed by the standard
     /// <see cref="EnumerableQuery{T}"/> class, resulting with exactly the same behavior as if this class was not used.
     /// <para>
@@ -126,34 +123,29 @@ namespace Rhetos.Dom.DefaultConcepts
     /// (the framework checks for collection interfaces to detect if the data is already materialized).
     /// </para>
     /// </remarks>
-    public sealed class InterpretedQueryable<T> : IOrderedQueryable<T>, IQueryProvider, IInterpretedQueryable
+    public sealed class InterpretedQueryable<T> : IOrderedQueryable<T>, IQueryProvider
     {
-        private readonly InterpretedQuerySource _source;
+        private readonly IInterpretedQuerySource _source;
 
         private readonly Expression _expression;
 
         /// <param name="source">A materialized collection. It is not copied, the query reads the current content of the collection on each execution.</param>
         /// <param name="threshold">If the source has this many records or more, the query is executed by the standard <see cref="EnumerableQuery{T}"/> class.</param>
         public InterpretedQueryable(IReadOnlyCollection<T> source, int threshold)
+            : this(new InterpretedQuerySource<T>(source ?? throw new ArgumentNullException(nameof(source)), threshold))
         {
-            ArgumentNullException.ThrowIfNull(source);
-            _source = new InterpretedQuerySource(source, typeof(T), threshold);
-            _expression = Expression.Constant(this);
         }
 
-        internal InterpretedQueryable(InterpretedQuerySource source)
+        internal InterpretedQueryable(InterpretedQuerySource<T> source)
+            : this(source, ((IQueryable)source).Expression)
         {
-            _source = source;
-            _expression = Expression.Constant(this);
         }
 
-        internal InterpretedQueryable(InterpretedQuerySource source, Expression expression)
+        internal InterpretedQueryable(IInterpretedQuerySource source, Expression expression)
         {
             _source = source;
             _expression = expression;
         }
-
-        InterpretedQuerySource IInterpretedQueryable.QuerySource => _source;
 
         /// <inheritdoc/>
         public Type ElementType => typeof(T);
@@ -216,11 +208,11 @@ namespace Rhetos.Dom.DefaultConcepts
             bool interpreted;
             object result;
 
-            if (expression is ConstantExpression sourceConstant && sourceConstant.Value is IInterpretedQueryable sourceQuery)
+            if (expression is ConstantExpression { Value: IInterpretedQuerySource rootSource })
             {
                 // Reading the source without any query operator applied.
                 interpreted = true;
-                result = sourceQuery.QuerySource.Items;
+                result = rootSource.Items;
             }
             else
             {
@@ -242,28 +234,24 @@ namespace Rhetos.Dom.DefaultConcepts
         /// <summary>
         /// Executes the query by the standard <see cref="EnumerableQuery{T}"/> class,
         /// resulting with exactly the same behavior as if this class was not used.
+        /// The expression is executed as is: the standard execution reads the source collection
+        /// of every <see cref="EnumerableQuery{T}"/> constant in the expression, including every <see cref="InterpretedQuerySource{T}"/>.
         /// </summary>
         private object ExecuteWithStandardQueryable(Expression expression)
         {
-            Expression standardExpression = StandardQueryableRewriter.Rewrite(expression);
-            IQueryProvider standardProvider = _source.StandardQuery.Provider;
+            IQueryProvider standardProvider = _source.StandardProvider;
 
             // A query that returns records is created (and executed later, on enumeration) instead of being executed here,
             // because EnumerableQuery executes the query operators only when enumerating the result.
             return InterpretedQueryUtility.GetQueryElementType(expression.Type) != null
-                ? standardProvider.CreateQuery(standardExpression)
-                : standardProvider.Execute(standardExpression);
+                ? standardProvider.CreateQuery(expression)
+                : standardProvider.Execute(expression);
         }
 
         /// <summary>
         /// Same format as <see cref="EnumerableQuery{T}"/>, for consistent logging.
         /// </summary>
-        public override string ToString()
-        {
-            if (_expression is ConstantExpression sourceConstant && ReferenceEquals(sourceConstant.Value, this))
-                return _source.Items?.ToString() ?? "null";
-            return _expression.ToString();
-        }
+        public override string ToString() => _expression.ToString();
     }
 
 #pragma warning restore CA1710 // Identifiers should have correct suffix
@@ -300,8 +288,8 @@ namespace Rhetos.Dom.DefaultConcepts
     }
 
     /// <summary>
-    /// Converts a query expression that uses <see cref="Queryable"/> methods over an <see cref="IInterpretedQueryable"/>
-    /// source, to an equivalent expression that uses <see cref="Enumerable"/> methods over the source collection,
+    /// Converts a query expression that uses <see cref="Queryable"/> methods over an <see cref="IInterpretedQuerySource"/>,
+    /// to an equivalent expression that uses <see cref="Enumerable"/> methods over the source collection,
     /// with the lambda expressions compiled by the expression interpreter.
     /// </summary>
     internal sealed class InterpretedQueryRewriter : ExpressionVisitor
@@ -345,9 +333,8 @@ namespace Rhetos.Dom.DefaultConcepts
 
         protected override Expression VisitConstant(ConstantExpression node)
         {
-            if (node.Value is IInterpretedQueryable query)
+            if (node.Value is IInterpretedQuerySource source)
             {
-                var source = query.QuerySource;
                 if (source.GetCurrentCount() >= source.Threshold)
                 {
                     // A composed query (e.g. Concat or Join) may contain multiple sources. Each source is checked
@@ -499,27 +486,6 @@ namespace Rhetos.Dom.DefaultConcepts
             }
 
             return parameterType;
-        }
-    }
-
-    /// <summary>
-    /// Replaces the <see cref="IInterpretedQueryable"/> source of the query with the standard
-    /// <see cref="EnumerableQuery{T}"/> over the same collection, so that the query can be executed
-    /// with the standard behavior.
-    /// </summary>
-    internal sealed class StandardQueryableRewriter : ExpressionVisitor
-    {
-        private StandardQueryableRewriter()
-        {
-        }
-
-        public static Expression Rewrite(Expression expression) => new StandardQueryableRewriter().Visit(expression);
-
-        protected override Expression VisitConstant(ConstantExpression node)
-        {
-            if (node.Value is IInterpretedQueryable query)
-                return Expression.Constant(query.QuerySource.StandardQuery);
-            return node;
         }
     }
 }
