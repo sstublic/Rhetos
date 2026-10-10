@@ -1,5 +1,12 @@
 # Rhetos release notes
 
+## 6.1.0 (TO BE RELEASED)
+
+### Internal improvements
+
+* Optimization: On Microsoft SQL Server, saving entities declares string and binary query parameters with a fixed size (the column length, or MAX),
+  so that save commands reuse one cached execution plan instead of compiling a new one for each combination of value lengths.
+
 ## 6.0.0 (2025-09-02)
 
 ### New features

@@ -40,7 +40,7 @@ namespace Rhetos.Dom.DefaultConcepts
         {
             PropertyInfo info = (PropertyInfo)conceptInfo;
             PropertyHelper.GenerateCodeForType(info, codeBuilder, "string");
-            PropertyHelper.GenerateStorageMapping(info, codeBuilder, _sqlResources); // Size is automatically set by SqlProperty, it should not be specified in storage mapping, to avoid automatic truncating longer strings.
+            PropertyHelper.GenerateStorageMapping(info, codeBuilder, _sqlResources, maxLength: ShortStringPropertyInfo.MaxLength); // A value longer than MaxLength must reach the database uncut, so that it fails there on save paths that skip CheckMaxLength.
 
             if (info.DataStructure is IWritableOrmDataStructure)
                 codeBuilder.InsertCode(LimitStringLengthOnSaveSnippet(info), WritableOrmDataStructureCodeGenerator.OldDataLoadedTag, info.DataStructure);
