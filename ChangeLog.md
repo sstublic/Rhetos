@@ -73,6 +73,8 @@
   Npgsql.EntityFrameworkCore.PostgreSQL 10.0.1 (PostgreSQL provider), Microsoft.CodeAnalysis.CSharp 5.3.0,
   NuGet.ProjectModel 6.14.3 (resolves security advisory GHSA-g4vj-cjjj-v7hg), MSTest 4.1.
 * LINQPad integration updated for LINQPad 9 (.NET 10 runtime paths).
+* Optimization: On Microsoft SQL Server, saving entities declares string and binary query parameters with a fixed size (the column length, or MAX),
+  so that save commands reuse one cached execution plan instead of compiling a new one for each combination of value lengths.
 
 ## 6.0.0 (2025-09-02)
 

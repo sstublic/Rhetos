@@ -108,6 +108,9 @@ namespace CommonConcepts.Test.Framework
             usedUndefinedKeys.Remove("SqlIndexClusteredDatabaseDefinition_Remove");
             usedUndefinedKeys.Remove("PropertyLoggingDefinition_GenericPropertyDeletedLogging"); // MS SQL does not use LogPropertyDeleted tag in the logging trigger.
 #endif
+#if RHETOS_POSTGRESQL
+            usedUndefinedKeys.Remove("StorageMappingSize"); // PostgreSQL parameter declarations do not depend on value length, so the storage mapping does not set the parameter size.
+#endif
 
             // The logging concepts dynamically generate resource keys based on property type.
             unusedKeys.RemoveWhere(key => key.StartsWith("PropertyLoggingDefinition_TextValue_"));

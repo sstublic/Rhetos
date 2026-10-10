@@ -153,4 +153,7 @@
   <data name="StorageMappingDbType_ShortString" xml:space="preserve">
     <value>System.Data.SqlDbType.NVarChar</value>
   </data>
+  <data name="StorageMappingSize" xml:space="preserve">
+    <value>Rhetos.Dom.DefaultConcepts.DbParameterSize.ComputeSize({0}?.Length, {1})</value>
+  </data>
 </root>

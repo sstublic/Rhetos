@@ -40,7 +40,7 @@ namespace Rhetos.Dom.DefaultConcepts
         {
             PropertyInfo info = (PropertyInfo)conceptInfo;
             PropertyHelper.GenerateCodeForType(info, codeBuilder, "byte[]");
-            PropertyHelper.GenerateStorageMapping(info, codeBuilder, _sqlResources);
+            PropertyHelper.GenerateStorageMapping(info, codeBuilder, _sqlResources, maxLength: DbParameterSize.Unbounded);
         }
     }
 }

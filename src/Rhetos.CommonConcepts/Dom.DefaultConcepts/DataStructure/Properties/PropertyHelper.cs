@@ -48,7 +48,7 @@ namespace Rhetos.Dom.DefaultConcepts
                     RepositoryHelper.AssignSimplePropertyTag, info.DataStructure);
         }
 
-        public static void GenerateStorageMapping(PropertyInfo info, ICodeBuilder codeBuilder, ISqlResources sqlResources, int precision = 0, int scale = 0, string overrideDbParameterType = null)
+        public static void GenerateStorageMapping(PropertyInfo info, ICodeBuilder codeBuilder, ISqlResources sqlResources, int precision = 0, int scale = 0, string overrideDbParameterType = null, int maxLength = 0)
         {
             if (info.DataStructure is IWritableOrmDataStructure)
             {
@@ -57,6 +57,9 @@ namespace Rhetos.Dom.DefaultConcepts
                     options += $", Precision = {precision}";
                 if (scale > 0)
                     options += $", Scale = {scale}";
+                string size = maxLength != 0 ? sqlResources.TryFormat("StorageMappingSize", $"entity.{info.Name}", maxLength) : null;
+                if (size != null)
+                    options += $", Size = {size}";
 
                 string dbParameterType = overrideDbParameterType
                     ?? sqlResources.FindSqlResourceKeyPropertyType("StorageMappingDbType_", info).SqlScript
@@ -71,5 +74,9 @@ namespace Rhetos.Dom.DefaultConcepts
                 codeBuilder.InsertCode(code, WritableOrmDataStructureCodeGenerator.PersistenceStorageMapperPropertyMappingTag, info.DataStructure);
             }
         }
+
+        // For binary compatibility with plugins compiled against the overload without maxLength.
+        public static void GenerateStorageMapping(PropertyInfo info, ICodeBuilder codeBuilder, ISqlResources sqlResources, int precision, int scale, string overrideDbParameterType)
+            => GenerateStorageMapping(info, codeBuilder, sqlResources, precision, scale, overrideDbParameterType, maxLength: 0);
     }
 }
