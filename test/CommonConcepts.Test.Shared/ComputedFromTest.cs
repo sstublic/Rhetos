@@ -340,6 +340,45 @@ namespace CommonConcepts.Test
             }
         }
 
+        [TestMethod]
+        public void ChangesOnReferencedLargeIdList()
+        {
+            const int n = 200;
+#if RHETOS_EF6
+            // EF6 filters 200 or more IDs by the Common.FilterId table. The filters for the old and the new items are then
+            // separate queries that KeepSynchronizedHelper.OptimizeFiltersUnion does not merge, so the computation is recomputed twice.
+            string expectedRecomputes = $"TestedInfo {n}n {n}o - 0i 0u 0d, TestedInfo {n}n {n}o - 0i {n}u 0d";
+#else
+            string expectedRecomputes = $"TestedInfo {n}n {n}o - 0i {n}u 0d";
+#endif
+            var log = new List<string>();
+            using var scope = TestScope.Create(builder => builder.ConfigureLogMonitor(log));
+            var test = scope.Resolve<Common.DomRepository>().TestChangesOnReferenced;
+
+            var parents = Enumerable.Range(0, n).Select(index => new TestChangesOnReferenced.Parent { Name = "p" + index }).ToList();
+            test.Parent.Insert(parents);
+            var poly = new TestChangesOnReferenced.ImplementationSimple { Name = "s" };
+            test.ImplementationSimple.Insert(poly);
+            var tested = parents.Select(parent => new TestChangesOnReferenced.Tested { Name = "t", ParentID = parent.ID, PolyID = poly.ID }).ToList();
+            test.Tested.Insert(tested);
+
+            log.Clear();
+            foreach (var item in tested)
+                item.Name += "X";
+            test.Tested.Update(tested);
+            Assert.AreEqual(expectedRecomputes, TestUtility.DumpSorted(FindRecomputes(log)), "ChangesOnReferenced 'Base'.");
+
+            log.Clear();
+            foreach (var parent in parents)
+                parent.Name += "X";
+            test.Parent.Update(parents);
+            Assert.AreEqual(expectedRecomputes, TestUtility.DumpSorted(FindRecomputes(log)), "ChangesOnReferenced 'Base.Parent'.");
+
+            Assert.AreEqual(
+                TestUtility.DumpSorted(parents, parent => "tX-" + parent.Name + "-s"),
+                TestUtility.DumpSorted(test.TestedInfo.Load(tested.Select(item => item.ID)), item => item.Info));
+        }
+
         private static readonly Regex FindRecomputesRegex = new Regex(@"Performance\.(?<module>\w+)\.(?<entity>\w+).*DiffFrom\w+: (?<new>.+) new items, (?<old>.+) old items, (?<ins>.+) to insert, (?<upd>.+) to update, (?<del>.+) to delete");
 
         private List<string> FindRecomputes(List<string> log)

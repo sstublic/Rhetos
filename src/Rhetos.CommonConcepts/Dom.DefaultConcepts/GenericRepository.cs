@@ -344,7 +344,7 @@ namespace Rhetos.Dom.DefaultConcepts
                 _logger.Trace(() => "Reading using Query().Where(property filter");
                 var query = (IQueryable<TEntityInterface>)Reflection.RepositoryQueryMethod.InvokeEx(_repository.Value);
                 var filterExpression = _genericFilterHelper.ToExpression((IEnumerable<PropertyFilter>)parameter, Reflection.EntityNavigationType);
-                return Reflection.Where(query, filterExpression);
+                return Reflection.Where(query, _ormUtility.OptimizeContains(query, filterExpression));
             }
 
             // If the parameter is a filter expression, unless explicitly implemented above, use Query().Where(parameter)
@@ -361,18 +361,7 @@ namespace Rhetos.Dom.DefaultConcepts
                 _logger.Trace(() => "Reading using Query().Where(item => guids.Contains(item.ID))");
                 var parameterList = parameter is List<Guid> list ? list : ((IEnumerable<Guid>)parameter).ToList();
                 var query = (IQueryable<TEntityInterface>)Reflection.RepositoryQueryMethod.InvokeEx(_repository.Value);
-
-                // The query is built by reflection to avoid an obscure problem with complex query in NHibernate:
-                // using generic parameter TEntityInterface or IEntity for a query parameter fails with exception on some complex scenarios.
-                var filterPredicateParameter = Expression.Parameter(Reflection.EntityType, "item");
-                var filterPredicate = Expression.Lambda(
-                    Expression.Call(
-                        _ormUtility.CreateContainsItemsExpression(parameterList),
-                        typeof(List<Guid>).GetMethod("Contains"),
-                        new[] { Expression.Property(filterPredicateParameter, "ID") }),
-                    filterPredicateParameter);
-
-                return Reflection.Where(query, _ormUtility.OptimizeContains(filterPredicate));
+                return FilterQueryByIds(query, parameterList);
             }
 
             // It there is only enumerable filter available, use inefficient loader with in-memory filtering: Filter(Load(), parameter)
@@ -523,7 +512,7 @@ namespace Rhetos.Dom.DefaultConcepts
                 if (Reflection.IsQueryable(items))
                 {
                     var query = Reflection.AsQueryable(items);
-                    return Reflection.Where(query, filterExpression);
+                    return Reflection.Where(query, _ormUtility.OptimizeContains(query, filterExpression));
                 }
                 else
                 {
@@ -555,20 +544,8 @@ namespace Rhetos.Dom.DefaultConcepts
                 _logger.Trace(() => "Filtering using items.Where(item => guids.Contains(item.ID))");
                 var parameterList = parameter is List<Guid> list ? list : ((IEnumerable<Guid>)parameter).ToList();
 
-                if (items is IQueryable<TEntityInterface>) // Use queryable Where function with bool expression instead of bool function.
-                {
-                    // The query is built by reflection to avoid an obscure problem with complex query in NHibernate:
-                    // using generic parameter TEntityInterface or IEntity for a query parameter fails with exception on some complex scenarios.
-                    var filterPredicateParameter = Expression.Parameter(Reflection.EntityType, "item");
-                    var filterPredicate = Expression.Lambda(
-                        Expression.Call(
-                            _ormUtility.CreateContainsItemsExpression(parameterList),
-                            typeof(List<Guid>).GetMethod("Contains"),
-                            new[] { Expression.Property(filterPredicateParameter, "ID") }),
-                        filterPredicateParameter);
-
-                    return Reflection.Where((IQueryable<TEntityInterface>)items, _ormUtility.OptimizeContains(filterPredicate));
-                }
+                if (items is IQueryable<TEntityInterface> query) // Use queryable Where function with bool expression instead of bool function.
+                    return FilterQueryByIds(query, parameterList);
 
                 return items.Where(item => parameterList.Contains(item.ID));
             }
@@ -582,6 +559,24 @@ namespace Rhetos.Dom.DefaultConcepts
             }
             else
                 throw new FrameworkException(errorMessage);
+        }
+
+        /// <summary>
+        /// Returns <c>query.Where(item => ids.Contains(item.ID))</c>, with the 'contains' operation optimized by the ORM.
+        /// </summary>
+        private IQueryable<TEntityInterface> FilterQueryByIds(IQueryable<TEntityInterface> query, List<Guid> ids)
+        {
+            // The query is built by reflection to avoid an obscure problem with complex query in NHibernate:
+            // using generic parameter TEntityInterface or IEntity for a query parameter fails with exception on some complex scenarios.
+            var filterPredicateParameter = Expression.Parameter(Reflection.EntityType, "item");
+            var filterPredicate = Expression.Lambda(
+                Expression.Call(
+                    _ormUtility.CreateContainsItemsExpression(ids),
+                    typeof(List<Guid>).GetMethod("Contains"),
+                    new[] { Expression.Property(filterPredicateParameter, "ID") }),
+                filterPredicateParameter);
+
+            return Reflection.Where(query, _ormUtility.OptimizeContains(query, _ormUtility.OptimizeContains(filterPredicate)));
         }
 
         #endregion

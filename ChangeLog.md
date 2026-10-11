@@ -8,12 +8,16 @@
   * Update the existing projects (.csproj) by setting `TargetFramework` to `net10.0`, and updating `PackageReference` for
     `System.*` and `Microsoft.*` packages to the latest version (`10.0.0` or higher).
   * If the file exists, update `LangVersion` in the `Directory.Build.props` file from `12.0` to `14`.
-* **Rhetos.MsSql** (EF Core provider): updated from Entity Framework Core 8 to **EF Core 10**, with Microsoft.Data.SqlClient 6.1.6.
+* **Rhetos.MsSql** (EF Core provider): updated from Entity Framework Core 8 to **EF Core 10** (10.0.12),
+  with Microsoft.Data.SqlClient 6.1.6. EF Core 10.0.12 includes the fix for an `InvalidCastException` in a
+  `Contains` query on a list containing null, translated to a JSON parameter (EF Core 10.0.2 to 10.0.7).
   * EF Core 10 translates a parameterized collection in a LINQ `Contains` query to multiple scalar parameters,
     instead of a JSON-array parameter with OPENJSON (the EF Core 8 behavior). The query results are unchanged,
     but the generated SQL text and query plans are different: update any tests that assert the generated SQL text,
     and expect query-plan cache invalidation on the first deployment.
   * EF Core 10 also simplifies the generated SQL parameter names (for example, `@__p_0` becomes `@p1`).
+  * The database compatibility level 130 (SQL Server 2016) or higher is required: Rhetos sends a list of 200 or more IDs
+    in a filter as a JSON parameter with OPENJSON (see the `Common.FilterId` note in Internal improvements).
 * **Rhetos.MsSqlEf6** (EF 6 provider): updated EntityFramework to **6.5.2**, the first version that supports
   applications compiled with C# 14 on .NET 10 (the C# 14 "first-class spans" feature changes `.Contains()` overload
   resolution on arrays, which broke LINQ query translation on earlier EF 6 versions).
@@ -67,6 +71,14 @@
 
 ### Internal improvements
 
+* **Rhetos.MsSql** and **Rhetos.PostgreSql** (EF Core providers): filtering by a list of 200 or more IDs
+  (for example, the generated repository `Filter` method and `ChangesOnReferenced` computations) no longer inserts
+  the IDs into the `Common.FilterId` table. Lists of 200 or more IDs in the repository ID filters (`Filter(query, ids)`,
+  `Query(ids)`, `Load(ids)`) and in the generic `In` and `NotIn` filters on ID and reference properties are sent as
+  one collection parameter: on SQL Server a JSON parameter with OPENJSON; on PostgreSQL an array parameter,
+  as before. Smaller lists and other element types keep EF Core's default parameter translation.
+  The EF 6 provider (**Rhetos.MsSqlEf6**) is unchanged.
+  New method `IOrmUtility.OptimizeContains(query, predicate)`; its default implementation returns the predicate unchanged.
 * Updated other dependencies to .NET 10-compatible versions: Microsoft.Extensions.* and
   System.Configuration.ConfigurationManager 10.0.5, System.ComponentModel.Composition 10.0.5,
   System.Security.Cryptography.Pkcs 10.0.5, System.Text.Encoding.CodePages 10.0.10,

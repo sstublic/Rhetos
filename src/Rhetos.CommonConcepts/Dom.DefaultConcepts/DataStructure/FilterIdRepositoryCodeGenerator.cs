@@ -35,53 +35,36 @@ namespace Rhetos.Dom.DefaultConcepts
     [ExportMetadata(MefProvider.DependsOn, typeof(OrmDataStructureCodeGenerator))]
     public class FilterIdRepositoryCodeGenerator : IConceptCodeGenerator
     {
+        /// <summary>
+        /// Body of the Common.FilterId repository method CreateQueryableFilterIds, after the IDs are materialized.
+        /// The ORM provider must insert the implementation at this tag, including the return statement.
+        /// </summary>
+        public static readonly string CreateQueryableFilterIdsTag = "/*CreateQueryableFilterIds*/";
+
+        /// <summary>
+        /// Returns true for the Common.FilterId data structure, the only one whose repository contains <see cref="CreateQueryableFilterIdsTag"/>.
+        /// </summary>
+        public static bool IsFilterIdDataStructure(DataStructureInfo info) => info.Module.Name == "Common" && info.Name == "FilterId";
+
         public void GenerateCode(IConceptInfo conceptInfo, ICodeBuilder codeBuilder)
         {
             var info = (DataStructureInfo)conceptInfo;
 
-            if (info.Module.Name == "Common" && info.Name == "FilterId")
-                codeBuilder.InsertCode(snippet, RepositoryHelper.RepositoryMembers, info);
+            if (IsFilterIdDataStructure(info))
+                codeBuilder.InsertCode(CreateQueryableFilterIdsSnippet, RepositoryHelper.RepositoryMembers, info);
         }
 
-        const string snippet =
-        @"/// <summary>
-        /// Depending on the ids count, this method will return the list of IDs, or insert the ids to the database and return an SQL query that selects the ids.
-        /// EF 6.1.3 has performance issues on Contains function with large lists. It seems to have O(n^2) time complexity.
+        private static string CreateQueryableFilterIdsSnippet =>
+        $@"/// <summary>
+        /// Returns the given IDs in a form that the ORM provider can efficiently use in a LINQ query filter, such as <c>ids.Contains(item.ID)</c>.
+        /// Depending on the ORM provider and the number of IDs, the result is a materialized list of the IDs, or a query that selects them.
         /// </summary>
         public IEnumerable<Guid> CreateQueryableFilterIds(IEnumerable<Guid> ids)
-        {
+        {{
             Rhetos.Utilities.CsUtility.Materialize(ref ids);
 
-            if (ids.Count() < 200)
-                return ids;
-
-            var handle = Guid.NewGuid();
-            string sqlInsertIdFormat = ""INSERT INTO Common.FilterId (Handle, Value) VALUES ('"" + _executionContext.SqlUtility.GuidToString(handle) + ""', '{0}');"";
-
-            const int chunkSize = 1000; // Keeping a moderate SQL script size.
-            for (int start = 0; start < ids.Count(); start += chunkSize)
-            {
-                string sqlInsertIds = string.Join(""\r\n"", ids.Skip(start).Take(chunkSize)
-                        .Select(id => string.Format(sqlInsertIdFormat, _executionContext.SqlUtility.GuidToString(id))));
-                _executionContext.SqlExecuter.ExecuteSql(sqlInsertIds);
-            }
-
-            // Delete temporary data when closing the connection. The data must remain in the database until the returned query is used.
-            string deleteFilterIds = ""DELETE FROM Common.FilterId WHERE Handle = "" + _executionContext.SqlUtility.QuoteGuid(handle);
-            _executionContext.PersistenceTransaction.BeforeClose += () =>
-                {
-                    try
-                    {
-                        _executionContext.SqlExecuter.ExecuteSql(deleteFilterIds);
-                    }
-                    catch
-                    {
-                        // Cleanup error may be ignored. The temporary data may be deleted on regular maintenance.
-                    }
-                };
-
-            return Query().Where(filterId => filterId.Handle == handle).Select(filterId => filterId.Value.Value);
-        }
+            {CreateQueryableFilterIdsTag}
+        }}
 
         ";
     }
