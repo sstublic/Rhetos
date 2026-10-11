@@ -42,6 +42,7 @@ namespace Rhetos.Dom.DefaultConcepts
         public MethodInfo StartsWithCaseInsensitiveMethod => typeof(DatabaseExtensionFunctions).GetMethod("StartsWithCaseInsensitive");
         public Expression OptimizeContains(Expression expressionToOptimize) => EFExpression.OptimizeContains(expressionToOptimize);
         public Expression<Func<T, bool>> OptimizeContains<T>(Expression<Func<T, bool>> expressionToOptimize) => EFExpression.OptimizeContains(expressionToOptimize);
+        public Expression OptimizeContains(IQueryable query, Expression predicate) => EFExpression.OptimizeContains(query, predicate);
         public IQueryable<T> WhereContains<T>(IQueryable<T> query, List<Guid> ids, Expression<Func<T, Guid>> memberSelector) => EFExpression.WhereContains(query, ids, memberSelector);
 
         public Expression CreateContainsItemsExpression<TItems>(TItems items)

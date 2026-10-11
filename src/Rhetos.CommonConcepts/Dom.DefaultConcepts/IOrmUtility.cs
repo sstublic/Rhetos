@@ -50,6 +50,16 @@ namespace Rhetos.Dom.DefaultConcepts
         Expression OptimizeContains(Expression expressionToOptimize);
 
         /// <summary>
+        /// Optimizes the 'contains' operations in the predicate for the given query, for example depending on the query provider.
+        /// The returned predicate should only be applied to this query.
+        /// </summary>
+        /// <remarks>
+        /// Apply this method when applying the predicate to the query, in addition to <see cref="OptimizeContains(Expression)"/>
+        /// that is applied when creating the predicate. The default implementation returns the predicate unchanged.
+        /// </remarks>
+        Expression OptimizeContains(IQueryable query, Expression predicate) => predicate;
+
+        /// <summary>
         /// Optimizes LINQ expression <c>item => ids.Contains(memberSelector)</c>.
         /// The same optimization is applied by <see cref="WhereContains{T}(IQueryable{T}, List{Guid}, Expression{Func{T, Guid}})"/> method, with a different syntax.
         /// </summary>
@@ -61,7 +71,7 @@ namespace Rhetos.Dom.DefaultConcepts
 
         /// <summary>
         /// Optimized alternative to LINQ operation: <c>query.Where(item => ids.Contains(memberSelector))</c>.
-        /// The same optimization is applied by <see cref="OptimizeContains"/> method, with a different syntax.
+        /// The same optimization is applied by <see cref="OptimizeContains(Expression)"/> method, with a different syntax.
         /// </summary>
         /// <remarks>
         /// Entity Framework 6.1.3 has performance issues with Contains method: it does not cache the compiled SQL

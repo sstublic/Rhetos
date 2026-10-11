@@ -83,6 +83,22 @@ namespace CommonConcepts.Test
         }
 
         [TestMethod]
+        public void LargeIdList_GenericRepositoryFilterInMemoryItems()
+        {
+            // GenericRepository filters in-memory items with the repository's queryable Filter method, on an in-memory query.
+            var items = Enumerable.Range(0, LargeIdListSize + 1)
+                .Select(index => new Common.Queryable.Test10_Simple { ID = Guid.NewGuid(), i = index })
+                .ToList();
+            var ids = items.Take(LargeIdListSize).Select(item => item.ID).ToList();
+            AssertFilterIdTableUsedOnlyOnEf6(
+                act: scope =>
+                {
+                    var filtered = scope.Resolve<GenericRepository<Test10.Simple>>().Filter(items, ids);
+                    CollectionAssert.AreEqual(ids, filtered.Select(item => item.ID).ToList());
+                });
+        }
+
+        [TestMethod]
         public void LargeIdList_SaveLoadOldItems()
         {
             // ModificationTimeOf loads the old items' properties on save.
@@ -307,9 +323,11 @@ namespace CommonConcepts.Test
         }
 
         //=======================================================================
-        // Results for different list sizes, including EF Core parameter limits:
-        // SQL Server allows 2100 parameters per command. EF Core sends one parameter per ID while the command has at most 2098 parameters
-        // in total (including other query parameters), otherwise it sends the IDs in a single JSON parameter.
+        // Results for different list sizes, including the limits of the ID list translation on EF Core with SQL Server:
+        // The ID filters (Filter, Query(ids), and Load(ids) in batches of 500 IDs) and the generic In filter on ID and reference properties
+        // send a list of 200 or more IDs in a single JSON parameter.
+        // A smaller list keeps EF Core's default translation: SQL Server allows 2100 parameters per command, and EF Core sends one parameter per ID
+        // while the command has at most 2098 parameters in total (including other query parameters), otherwise it sends the IDs in a single JSON parameter.
 
         [TestMethod]
         [DataRow(0)]
@@ -344,6 +362,11 @@ namespace CommonConcepts.Test
                 expected.Where(i => i >= minI).ToList(),
                 repository.Filter(repository.Query().Where(item => item.i >= minI), ids).Select(item => item.i).OrderBy(i => i).ToList(),
                 "Filter by IDs, with an additional query parameter.");
+
+            CollectionAssert.AreEqual(
+                expected,
+                repository.Load(ids).Select(item => item.i).OrderBy(i => i).ToList(),
+                "Load by IDs.");
         }
 
         /// <summary>
@@ -377,22 +400,30 @@ namespace CommonConcepts.Test
             using var scope = TestScope.Create();
             var repository = scope.Resolve<Common.DomRepository>().Test10.Simple;
 
-            var tests = new (int IdCount, string ExpectedShape)[]
+            var tests = new (int IdCount, string LinqContainsShape, string RhetosFilterShape)[]
             {
-                (250, "IN (250 parameters)"), // A multiple of 50, so EF Core's parameter padding in this range does not add parameters.
-                (2099, "OPENJSON"), // Above EF Core's limit of 2098 parameters.
+                (199, "IN (200 parameters)", "IN (200 parameters)"), // EF Core pads the parameter list to a multiple of 50 in this range.
+                (200, "IN (200 parameters)", "OPENJSON"), // The smallest list that the Rhetos filters send in a JSON parameter.
+                (2099, "OPENJSON", "OPENJSON"), // Above EF Core's limit of 2098 parameters.
             };
 
-            // The LINQ Contains query is a control query: Filter should result with the same default EF Core translation of the ID list.
-            var expectedReport = tests.Select(test => $"{test.IdCount} IDs: LINQ Contains {test.ExpectedShape}; Filter {test.ExpectedShape}");
-            var actualReport = new List<string>();
-            foreach (var test in tests)
+            // The LINQ Contains query is a control query, with EF Core's default translation of the ID list.
+            var queries = new (string Name, Func<List<Guid>, IQueryable<Common.Queryable.Test10_Simple>> Create, bool IsControlQuery)[]
+            {
+                ("LINQ Contains", ids => repository.Query().Where(item => ids.Contains(item.ID)), true),
+                ("generic In", ids => repository.Query(new FilterCriteria("ID", "In", ids)), false),
+                ("Filter", ids => repository.Filter(repository.Query(), ids), false),
+                ("Query(ids)", ids => repository.Query(ids), false),
+            };
+
+            var expectedReport = tests.SelectMany(test => queries.Select(query =>
+                $"{test.IdCount} IDs, {query.Name}: {(query.IsControlQuery ? test.LinqContainsShape : test.RhetosFilterShape)}"));
+            var actualReport = tests.SelectMany(test =>
             {
                 var ids = CreateTest10SimpleRecords(test.IdCount).Select(record => record.ID).ToList();
-                string controlSql = repository.Query().Where(item => ids.Contains(item.ID)).Select(item => item.ID).GetSqlQuery();
-                string filterSql = repository.Filter(repository.Query(), ids).Select(item => item.ID).GetSqlQuery();
-                actualReport.Add($"{test.IdCount} IDs: LINQ Contains {SummarizeIdListFilterSql(controlSql)}; Filter {SummarizeIdListFilterSql(filterSql)}");
-            }
+                return queries.Select(query =>
+                    $"{test.IdCount} IDs, {query.Name}: {SummarizeIdListFilterSql(query.Create(ids).Select(item => item.ID).GetSqlQuery())}");
+            });
 
             string expected = string.Join(Environment.NewLine, expectedReport);
             string actual = string.Join(Environment.NewLine, actualReport);
