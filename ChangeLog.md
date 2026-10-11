@@ -24,6 +24,10 @@
 
 ### Internal improvements
 
+* **Rhetos.MsSql** and **Rhetos.PostgreSql** (EF Core providers): filtering by a list of 200 or more IDs
+  (for example, the generated repository `Filter` method and `ChangesOnReferenced` computations) no longer inserts
+  the IDs into the `Common.FilterId` table. The list is passed to the LINQ query, and EF Core applies its default
+  parameter translation for `Contains`. The EF 6 provider (**Rhetos.MsSqlEf6**) is unchanged.
 * Updated other dependencies to .NET 10-compatible versions: Microsoft.Extensions.* and
   System.Configuration.ConfigurationManager 10.0.5, System.ComponentModel.Composition 10.0.5,
   System.Security.Cryptography.Pkcs 10.0.5, System.Text.Encoding.CodePages 10.0.10,

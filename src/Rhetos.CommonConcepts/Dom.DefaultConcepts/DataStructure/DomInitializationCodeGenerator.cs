@@ -426,7 +426,7 @@ namespace Common
             }}
             else
             {{
-                // Depending on the ids count, this method will return the list of IDs, or insert the ids to the database and return an SQL query that selects the ids.
+                // Depending on the ORM provider and the ids count, CreateQueryableFilterIds returns the list of IDs, or an SQL query that selects the ids.
                 var idsQuery = _domRepository.Common.FilterId.CreateQueryableFilterIds(ids);
 
                 if (idsQuery is IList<Guid>)
