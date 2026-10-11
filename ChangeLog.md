@@ -8,7 +8,9 @@
   * Update the existing projects (.csproj) by setting `TargetFramework` to `net10.0`, and updating `PackageReference` for
     `System.*` and `Microsoft.*` packages to the latest version (`10.0.0` or higher).
   * If the file exists, update `LangVersion` in the `Directory.Build.props` file from `12.0` to `14`.
-* **Rhetos.MsSql** (EF Core provider): updated from Entity Framework Core 8 to **EF Core 10**, with Microsoft.Data.SqlClient 6.1.6.
+* **Rhetos.MsSql** (EF Core provider): updated from Entity Framework Core 8 to **EF Core 10** (10.0.12),
+  with Microsoft.Data.SqlClient 6.1.6. EF Core 10.0.12 includes the fix for an `InvalidCastException` in a
+  `Contains` query on a list containing null, translated to a JSON parameter (EF Core 10.0.2 to 10.0.7).
   * EF Core 10 translates a parameterized collection in a LINQ `Contains` query to multiple scalar parameters,
     instead of a JSON-array parameter with OPENJSON (the EF Core 8 behavior). The query results are unchanged,
     but the generated SQL text and query plans are different: update any tests that assert the generated SQL text,
